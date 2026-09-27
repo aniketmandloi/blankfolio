@@ -3,7 +3,7 @@
 	"type": "module",
 	"main": "src/index.ts",
 	"scripts": {
-		"build": "tsdown",
+		"build": "varlock codegen && tsdown",
 		"check-types": "tsc --noEmit",
 		"compile": "bun build --compile --no-compile-autoload-dotenv --minify --sourcemap --bytecode ./src/start.ts --outfile server",
 		"dev": "tsx watch src/start.ts",
