@@ -176,7 +176,7 @@ export default function ProjectOverview({ id }: { id: string }) {
 			: saveBrief.error
 				? errorText(saveBrief.error)
 				: "";
-	const conflictDetected = /conflict|another tab|revision/i.test(saveError);
+	const conflictDetected = saveBrief.error?.data?.code === "CONFLICT";
 
 	useEffect(() => {
 		window.dispatchEvent(
