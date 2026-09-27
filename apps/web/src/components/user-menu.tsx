@@ -10,12 +10,11 @@ import {
 } from "@blankfolio/ui/components/dropdown-menu";
 import { Skeleton } from "@blankfolio/ui/components/skeleton";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 
 import { authClient } from "@/lib/auth-client";
+import { queryClient } from "@/utils/trpc";
 
 export default function UserMenu() {
-	const router = useRouter();
 	const { data: session, isPending } = authClient.useSession();
 
 	if (isPending) {
@@ -46,7 +45,8 @@ export default function UserMenu() {
 							authClient.signOut({
 								fetchOptions: {
 									onSuccess: () => {
-										router.push("/");
+										queryClient.clear();
+										window.location.replace("/login");
 									},
 								},
 							});

@@ -13,11 +13,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import type { authClient } from "@/lib/auth-client";
+import { authClient } from "@/lib/auth-client";
 import { trpc } from "@/utils/trpc";
 
 type ProjectState = "active" | "archived";
-type Session = typeof authClient.$Infer.Session;
 
 function formatDate(value: Date | string) {
 	return new Intl.DateTimeFormat("en", {
@@ -31,7 +30,8 @@ function errorText(error: unknown) {
 	return error instanceof Error ? error.message : "Please try again.";
 }
 
-export default function Dashboard({ session }: { session: Session }) {
+export default function Dashboard() {
+	const { data: session } = authClient.useSession();
 	const [state, setState] = useState<ProjectState>("active");
 	const [title, setTitle] = useState("");
 	const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -93,7 +93,7 @@ export default function Dashboard({ session }: { session: Session }) {
 			<div className="folio-page projects-page">
 				<div className="page-heading">
 					<div>
-						<p className="eyebrow">Research desk · {session.user.name}</p>
+						<p className="eyebrow">Research desk · {session?.user.name}</p>
 						<h1 className="display-title">Projects</h1>
 						<p className="page-intro">
 							A quiet place to shape a question into a research plan.
