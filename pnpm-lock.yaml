@@ -459,6 +459,34 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  apps/worker:
+    dependencies:
+      '@blankfolio/api':
+        specifier: workspace:*
+        version: link:../../packages/api
+      '@blankfolio/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      varlock:
+        specifier: 'catalog:'
+        version: 1.18.0
+    devDependencies:
+      '@blankfolio/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.3
+      tsdown:
+        specifier: ^0.23.0
+        version: 0.23.0(tsx@4.23.15)(typescript@6.0.3)
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.15
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   packages/api:
     dependencies:
       '@blankfolio/auth':
