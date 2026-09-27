@@ -26,12 +26,8 @@ export default function Header() {
 							confirmLeavingUnsavedBrief(event, hasUnsavedBrief)
 						}
 					>
-						<span className="wordmark-mark" aria-hidden="true">
-							b.
-						</span>
-						<span>blankfolio</span>
+						blankfolio
 					</Link>
-					<span className="header-divider" aria-hidden="true" />
 					<nav className="site-nav" aria-label="Primary navigation">
 						<Link
 							className="site-nav-link"
