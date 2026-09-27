@@ -6,6 +6,8 @@ export default defineConfig({
 	outDir: "./dist",
 	clean: true,
 	deps: {
-		alwaysBundle: [/@blankfolio\/.*/],
+		// Vercel serves dist/ from the function root, away from the traced
+		// apps/server/node_modules, so the build must not import packages at runtime.
+		alwaysBundle: [/.*/],
 	},
 });
