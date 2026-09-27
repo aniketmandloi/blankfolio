@@ -5,10 +5,7 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, gt, lt, ne } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure, router } from "../index";
-import {
-	createProjectCleanupRegistry,
-	requireProject,
-} from "../project-lifecycle";
+import { requireProject } from "../project-lifecycle";
 
 const constraintField = z
 	.string()
@@ -90,8 +87,13 @@ export const projectsRouter = router({
 			}),
 		)
 		.query(async ({ ctx, input }) => {
-			await requireProject(ctx.db, ctx.session.user.id, input.id);
-			return historyPage(ctx.db, input.id, input.limit, input.cursor);
+			return ctx.db.transaction(
+				async (tx) => {
+					await requireProject(tx, ctx.session.user.id, input.id);
+					return historyPage(tx, input.id, input.limit, input.cursor);
+				},
+				{ isolationLevel: "repeatable read", accessMode: "read only" },
+			);
 		}),
 	list: protectedProcedure
 		.input(
@@ -148,9 +150,12 @@ export const projectsRouter = router({
 				return detail(tx, ctx.session.user.id, id);
 			}),
 		),
-	get: protectedProcedure
-		.input(projectId)
-		.query(({ ctx, input }) => detail(ctx.db, ctx.session.user.id, input.id)),
+	get: protectedProcedure.input(projectId).query(({ ctx, input }) =>
+		ctx.db.transaction((tx) => detail(tx, ctx.session.user.id, input.id), {
+			isolationLevel: "repeatable read",
+			accessMode: "read only",
+		}),
+	),
 	saveBrief: protectedProcedure
 		.input(
 			projectId.extend({
@@ -220,7 +225,7 @@ export const projectsRouter = router({
 					.where(eq(researchProject.id, input.id));
 			});
 			try {
-				await createProjectCleanupRegistry().run(ctx.db, input.id);
+				await ctx.projectCleanup.run(ctx.db, input.id);
 				return { deleted: true as const, cleanupPending: false };
 			} catch {
 				// Tombstone is already committed. Operators retry cleanup without exposing content.

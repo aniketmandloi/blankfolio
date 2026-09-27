@@ -1,3 +1,4 @@
+import type { ProjectCleanupRegistry } from "@blankfolio/api/project-lifecycle";
 import { appRouter } from "@blankfolio/api/routers/index";
 import type { Session } from "@blankfolio/auth";
 import type { Database } from "@blankfolio/db";
@@ -15,6 +16,7 @@ export type ApplicationServices = {
 		};
 	};
 	corsOrigin: string;
+	projectCleanup?: ProjectCleanupRegistry;
 };
 /** Importable request application: no sockets, environment loading, or global services. */
 export function createApp(services: ApplicationServices) {

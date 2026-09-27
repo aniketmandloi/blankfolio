@@ -1,7 +1,7 @@
 import type { Database, Transaction } from "@blankfolio/db";
 import { briefRevision, researchProject } from "@blankfolio/db/schema/projects";
 import { TRPCError } from "@trpc/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 export type ProjectOperation = "read" | "write" | "unarchive";
 export async function requireProject(
@@ -72,6 +72,15 @@ export async function retryProjectCleanup(
 	const pending = await db
 		.select({ id: researchProject.id })
 		.from(researchProject)
-		.where(eq(researchProject.state, "deleting"));
+		.where(
+			and(
+				eq(researchProject.state, "deleting"),
+				isNull(researchProject.cleanupCompletedAt),
+			),
+		);
 	for (const project of pending) await registry.run(db, project.id);
 }
+
+export type ProjectCleanupRegistry = ReturnType<
+	typeof createProjectCleanupRegistry
+>;
