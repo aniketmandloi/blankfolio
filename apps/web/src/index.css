@@ -664,3 +664,115 @@ body {
 		width: 100%;
 	}
 }
+
+.field-legend {
+	margin-bottom: 0.2rem;
+	color: var(--folio-ink);
+	font-size: 0.78rem;
+	font-weight: 600;
+}
+
+.query-row {
+	display: grid;
+	gap: 0.35rem;
+}
+
+.query-input {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.4rem;
+}
+
+.query-input textarea {
+	min-height: 3.2rem;
+}
+
+.add-query {
+	justify-self: start;
+}
+
+.source-option {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.55rem;
+	color: var(--folio-ink);
+	font-size: 0.74rem;
+	line-height: 1.45;
+}
+
+.source-option input {
+	margin-top: 0.2rem;
+}
+
+.source-option input:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: 2px;
+}
+
+.confirm-queries {
+	margin: 0.5rem 0;
+	padding-left: 1.2rem;
+	color: var(--folio-ink);
+	font-size: 0.72rem;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+
+.job-list,
+.paper-list {
+	margin: 0.9rem 0 0;
+	padding: 0;
+	list-style: none;
+}
+
+.job-row {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 1rem;
+	padding: 0.8rem 0;
+	border-top: 1px solid var(--folio-rule);
+}
+
+.job-state {
+	margin: 0 0 0.2rem;
+	color: var(--folio-ink);
+	font-size: 0.76rem;
+	font-weight: 600;
+}
+
+.job-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem;
+}
+
+.outcome-status {
+	color: var(--folio-soft-ink);
+	font-size: 0.65rem;
+	font-weight: 400;
+}
+
+.paper-list li {
+	padding: 0.65rem 0;
+	border-top: 1px dotted var(--folio-rule);
+	overflow-wrap: anywhere;
+}
+
+.paper-title {
+	margin: 0 0 0.2rem;
+	color: var(--folio-ink);
+	font-size: 0.76rem;
+	font-weight: 600;
+	line-height: 1.4;
+}
+
+.paper-empty {
+	padding: 0.8rem 0;
+}
+
+@media (max-width: 540px) {
+	.job-row {
+		flex-direction: column;
+	}
+}

@@ -719,13 +719,19 @@ export default function ProjectOverview({ id }: { id: string }) {
 							</h2>
 							<p>
 								{completeForDiscovery
-									? "Your saved title and topic are ready for a future literature discovery step."
+									? "Your saved title and topic are ready. Review the proposed Literature Scope before searching."
 									: "Add a working title and research topic to prepare this project for its next step."}
 							</p>
 							{completeForDiscovery ? (
-								<span className="future-status">
-									Discovery will be available in a future step
-								</span>
+								<Link
+									className="text-link"
+									href={`/projects/${id}/literature`}
+									onClick={(event) =>
+										confirmLeavingUnsavedBrief(event, isDirty)
+									}
+								>
+									Review literature scope <span aria-hidden="true">↗</span>
+								</Link>
 							) : (
 								<a className="text-link" href="#brief-title">
 									Continue the brief <span aria-hidden="true">↗</span>
