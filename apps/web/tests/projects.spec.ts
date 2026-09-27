@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 test("a researcher returns to a saved brief and manages its lifecycle using the keyboard", async ({
 	page,
 }) => {
-	const title = `Browser fixture ${Date.now()}`;
+	const title = `Browser fixture ${test.info().project.name} ${Date.now()}`;
 	await page.goto("/dashboard");
 	await page.getByLabel("Working title", { exact: true }).fill(title);
 	await page
