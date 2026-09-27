@@ -1,0 +1,23 @@
+{
+  "name": "@blankfolio/auth",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@better-auth/drizzle-adapter": "1.7.5",
+    "@better-auth/expo": "catalog:",
+    "@blankfolio/db": "workspace:*",
+    "better-auth": "catalog:",
+    "drizzle-orm": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@blankfolio/config": "workspace:*",
+    "typescript": "^6.0.3"
+  }
+}

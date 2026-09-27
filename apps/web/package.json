@@ -1,0 +1,43 @@
+{
+  "name": "web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3001",
+    "build": "next build",
+    "check-types": "tsc --noEmit",
+    "start": "next start",
+    "env:generate": "varlock codegen"
+  },
+  "dependencies": {
+    "@blankfolio/api": "workspace:*",
+    "@blankfolio/ui": "workspace:*",
+    "@swc/helpers": "^0.5.23",
+    "@tanstack/react-form": "catalog:",
+    "@tanstack/react-query": "catalog:",
+    "@trpc/client": "catalog:",
+    "@trpc/server": "catalog:",
+    "@trpc/tanstack-react-query": "catalog:",
+    "@varlock/nextjs-integration": "1.2.2",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "better-auth": "catalog:",
+    "lucide-react": "catalog:",
+    "next": "^16.3.4",
+    "next-themes": "catalog:",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "sonner": "catalog:",
+    "varlock": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@blankfolio/config": "workspace:*",
+    "@tailwindcss/postcss": "catalog:",
+    "@tanstack/react-query-devtools": "^5.102.8",
+    "@types/node": "catalog:",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "catalog:",
+    "tailwindcss": "catalog:",
+    "typescript": "^6.0.3"
+  }
+}

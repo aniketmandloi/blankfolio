@@ -1,0 +1,46 @@
+{
+  "name": "blankfolio",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "check-types": "turbo run check-types",
+    "dev:native": "turbo run dev -F native --",
+    "dev:web": "turbo run dev -F web --",
+    "dev:server": "turbo run dev -F server --",
+    "db:push": "turbo run db:push -F @blankfolio/db --",
+    "db:studio": "turbo run db:studio -F @blankfolio/db --",
+    "db:generate": "turbo run db:generate -F @blankfolio/db --",
+    "db:migrate": "turbo run db:migrate -F @blankfolio/db --",
+    "deploy:setup": "vercel link",
+    "dev:vercel": "vercel dev -L",
+    "env:preview": "tsx scripts/sync-vercel-env.ts preview",
+    "env:production": "tsx scripts/sync-vercel-env.ts production",
+    "deploy": "vercel deploy",
+    "deploy:prod": "vercel deploy --prod",
+    "deploy:check": "vercel deploy --dry",
+    "env:generate": "varlock codegen --path ./apps/web/ && varlock codegen --path ./apps/server/ && varlock codegen --path ./apps/native/ && varlock codegen --path ./packages/db/",
+    "postinstall": "varlock codegen --path ./apps/web/ && varlock codegen --path ./apps/server/ && varlock codegen --path ./apps/native/ && varlock codegen --path ./packages/db/",
+    "auth:generate": "cd apps/server && pnpm run auth:generate",
+    "check": "biome check --write ."
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.12",
+    "@blankfolio/config": "workspace:*",
+    "@types/node": "catalog:",
+    "tsx": "catalog:",
+    "turbo": "^2.10.12",
+    "typescript": "^6.0.3",
+    "varlock": "catalog:",
+    "vercel": "^59.11.7"
+  },
+  "packageManager": "pnpm@12.3.4"
+}
