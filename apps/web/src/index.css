@@ -192,6 +192,7 @@ body {
 	width: min(100% - 2.5rem, 1080px);
 	margin: 0 auto;
 	padding: 3.15rem 0 2rem;
+	overflow-wrap: anywhere;
 }
 
 .page-heading,
