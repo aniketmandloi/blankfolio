@@ -839,7 +839,11 @@ export default function ProjectOverview({ id }: { id: string }) {
 										<Button
 											type="button"
 											className={`folio-button ${pendingAction === "delete" ? "folio-button-danger" : "folio-button-primary"}`}
-											disabled={isActionPending}
+											disabled={
+												isActionPending ||
+												saveBrief.isPending ||
+												recoveryPending
+											}
 											onClick={() => void confirmProjectAction()}
 										>
 											{isActionPending
