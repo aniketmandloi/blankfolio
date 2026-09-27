@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
-import { createAuth } from "@blankfolio/auth";
+import { changePilotAccess } from "@blankfolio/api/pilot-access";
+import { type AuthConfig, type AuthMail, createAuth } from "@blankfolio/auth";
 import { createDb } from "@blankfolio/db";
 import { createApp } from "../src/app";
 
-/** No sockets, production environment files, or fallback to DATABASE_URL. */
+const password = "Disposable-only-Password-123!";
+const origin = "http://localhost";
+
+/** No sockets, production environment files, real mail, or fallback to DATABASE_URL. */
 export async function createTestWorkspace() {
 	const url = process.env.TEST_DATABASE_URL;
 	if (!url)
@@ -53,38 +57,77 @@ export async function createTestWorkspace() {
 				),
 			);
 		}
-		const auth = createAuth(
-			{
-				BETTER_AUTH_URL: "http://localhost/api/auth",
-				BETTER_AUTH_SECRET: "disposable-test-only-secret-000000000000",
-				CORS_ORIGIN: "http://localhost",
-			},
-			db,
-		);
-		const app = createApp({ db, auth, corsOrigin: "http://localhost" });
+		const mail: AuthMail[] = [];
+		const createAuthApp = (env: Partial<AuthConfig> = {}) =>
+			createApp({
+				db,
+				auth: createAuth(
+					{
+						BETTER_AUTH_URL: `${origin}/api/auth`,
+						BETTER_AUTH_SECRET: "disposable-test-only-secret-000000000000",
+						CORS_ORIGIN: origin,
+						...env,
+					},
+					db,
+					async (message) => {
+						mail.push(message);
+					},
+				),
+				corsOrigin: env.CORS_ORIGIN ?? origin,
+			});
+		const app = createAuthApp();
+		const post = (path: string, body: unknown) =>
+			app.request(path, {
+				method: "POST",
+				headers: { "content-type": "application/json", origin },
+				body: JSON.stringify(body),
+			});
+		const invite = (email: string) =>
+			changePilotAccess(db, {
+				action: "invite",
+				email,
+				actor: "fixture-operator",
+				reason: "Synthetic pilot account",
+			});
+		const signUp = (email: string) =>
+			post("/api/auth/sign-up/email", {
+				email,
+				name: email.split("@")[0],
+				password,
+				callbackURL: `${origin}/email-verified`,
+			});
+		const signInWith = (email: string, secret = password) =>
+			post("/api/auth/sign-in/email", { email, password: secret });
+		const followLatestMail = (email: string, kind: AuthMail["kind"]) => {
+			const message = mail.findLast((m) => m.to === email && m.kind === kind);
+			if (!message) throw new Error(`No ${kind} mail for ${email}`);
+			return app.request(message.url);
+		};
+		const sessionCookie = (response: Response) => {
+			const cookie = response.headers.get("set-cookie");
+			if (!response.ok || !cookie)
+				throw new Error(`Fixture sign-in failed: HTTP ${response.status}`);
+			return cookie.split(";")[0] ?? "";
+		};
 		return {
 			db,
 			app,
+			mail,
 			close,
+			createAuthApp,
+			post,
+			invite,
+			signUp,
+			signInWith,
+			followLatestMail,
+			sessionCookie,
+			/** An invited researcher with a verified email and a live session. */
 			async signIn(name: string) {
-				const response = await app.request("/api/auth/sign-up/email", {
-					method: "POST",
-					headers: {
-						"content-type": "application/json",
-						origin: "http://localhost",
-					},
-					body: JSON.stringify({
-						email: `${name}-${randomUUID()}@example.test`,
-						name,
-						password: "Disposable-only-Password-123!",
-					}),
-				});
-				if (!response.ok)
-					throw new Error(`Fixture sign-up failed: HTTP ${response.status}`);
-				const cookie = response.headers.get("set-cookie");
-				if (!cookie)
-					throw new Error("Fixture sign-up returned no session cookie");
-				return cookie.split(";")[0] ?? "";
+				const email = `${name}-${randomUUID()}@example.test`;
+				await invite(email);
+				await signUp(email);
+				await followLatestMail(email, "verification");
+				return sessionCookie(await signInWith(email));
 			},
 		};
 	} catch (error) {

@@ -4,7 +4,7 @@ import { briefRevision, researchProject } from "@blankfolio/db/schema/projects";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, lt, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { protectedProcedure, router } from "../index";
+import { researchProcedure, router } from "../index";
 import { requireProject } from "../project-lifecycle";
 
 const constraintField = z
@@ -89,7 +89,7 @@ async function historyPage(
 	};
 }
 export const projectsRouter = router({
-	history: protectedProcedure
+	history: researchProcedure
 		.input(
 			projectId.extend({
 				limit: z.number().int().min(1).max(100).default(20),
@@ -105,7 +105,7 @@ export const projectsRouter = router({
 				{ isolationLevel: "repeatable read", accessMode: "read only" },
 			);
 		}),
-	list: protectedProcedure
+	list: researchProcedure
 		.input(
 			z.object({
 				state: z.enum(["active", "archived"]).optional(),
@@ -140,7 +140,7 @@ export const projectsRouter = router({
 			if (hasMore) items.pop();
 			return { items, nextCursor: hasMore ? items.at(-1)?.id : undefined };
 		}),
-	create: protectedProcedure
+	create: researchProcedure
 		.input(z.object({ title: z.string().max(120).default("") }))
 		.mutation(async ({ ctx, input }) =>
 			ctx.db.transaction(async (tx) => {
@@ -163,13 +163,13 @@ export const projectsRouter = router({
 				return detail(tx, ctx.session.user.id, id);
 			}),
 		),
-	get: protectedProcedure.input(projectId).query(({ ctx, input }) =>
+	get: researchProcedure.input(projectId).query(({ ctx, input }) =>
 		ctx.db.transaction((tx) => detail(tx, ctx.session.user.id, input.id), {
 			isolationLevel: "repeatable read",
 			accessMode: "read only",
 		}),
 	),
-	saveBrief: protectedProcedure
+	saveBrief: researchProcedure
 		.input(
 			projectId.extend({
 				expectedRevision: z.number().int().positive(),
@@ -202,7 +202,7 @@ export const projectsRouter = router({
 				return detail(tx, ctx.session.user.id, input.id);
 			}),
 		),
-	archive: protectedProcedure.input(projectId).mutation(({ ctx, input }) =>
+	archive: researchProcedure.input(projectId).mutation(({ ctx, input }) =>
 		ctx.db.transaction(async (tx) => {
 			await requireProject(tx, ctx.session.user.id, input.id, "write");
 			await tx
@@ -212,7 +212,7 @@ export const projectsRouter = router({
 			return detail(tx, ctx.session.user.id, input.id);
 		}),
 	),
-	unarchive: protectedProcedure.input(projectId).mutation(({ ctx, input }) =>
+	unarchive: researchProcedure.input(projectId).mutation(({ ctx, input }) =>
 		ctx.db.transaction(async (tx) => {
 			await requireProject(tx, ctx.session.user.id, input.id, "unarchive");
 			await tx
@@ -222,7 +222,7 @@ export const projectsRouter = router({
 			return detail(tx, ctx.session.user.id, input.id);
 		}),
 	),
-	delete: protectedProcedure
+	delete: researchProcedure
 		.input(projectId)
 		.mutation(async ({ ctx, input }) => {
 			await ctx.db.transaction(async (tx) => {

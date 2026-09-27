@@ -9,10 +9,18 @@ export type AuthConfig = {
 	BETTER_AUTH_SECRET: string;
 	CORS_ORIGIN: string;
 };
+export type AuthMail = {
+	kind: "verification" | "password-reset";
+	to: string;
+	url: string;
+};
+/** Must not throw for a known address: a failure would reveal account existence. */
+export type MailDelivery = (mail: AuthMail) => Promise<void>;
 
 export function createAuth(
 	env: AuthConfig,
 	database: Database,
+	deliverMail: MailDelivery,
 	desktopOrigins: readonly string[] = [],
 ) {
 	return betterAuth({
@@ -27,7 +35,17 @@ export function createAuth(
 			"exp://",
 			"http://localhost:8081",
 		],
-		emailAndPassword: { enabled: true },
+		emailAndPassword: {
+			enabled: true,
+			requireEmailVerification: true,
+			revokeSessionsOnPasswordReset: true,
+			sendResetPassword: ({ user, url }) =>
+				deliverMail({ kind: "password-reset", to: user.email, url }),
+		},
+		emailVerification: {
+			sendVerificationEmail: ({ user, url }) =>
+				deliverMail({ kind: "verification", to: user.email, url }),
+		},
 		secret: env.BETTER_AUTH_SECRET,
 		baseURL: env.BETTER_AUTH_URL,
 		advanced: {
