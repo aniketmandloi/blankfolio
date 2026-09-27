@@ -9,7 +9,7 @@ Research Projects are invite-only. An account can use research operations only w
 | `pending-invitation` | Verified, never invited | Waiting for an invitation |
 | `revoked` | Latest event is a revocation | Access withdrawn; projects kept |
 
-Background work must call `pilotAccessStatus(db, ownerId)` from `@blankfolio/api/pilot-access` before each stage and cancel that account's work unless it returns `eligible`. Job slices implement that cancellation; this slice has no jobs.
+Background work must call `pilotAccessStatus(db, ownerId)` from `@blankfolio/api/pilot-access` before each stage and cancel that account's work unless it returns `eligible`. The literature worker does this at every stage and publication, and `revoke` also cancels the account's queued and running searches immediately (they read *Cancelled because pilot access was withdrawn.*). Re-inviting does not restart them.
 
 ## Before pilot enablement
 
