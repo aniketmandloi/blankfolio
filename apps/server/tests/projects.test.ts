@@ -283,6 +283,22 @@ test("invalid or absent sessions cannot access research operations", async () =>
 	).rejects.toMatchObject({ data: { code: "UNAUTHORIZED" } });
 });
 
+test("the project list returns newest Research Projects first across pages", async () => {
+	const owner = client(await workspace.signIn("newest-first"));
+	const created = [];
+	for (const title of ["Oldest", "Middle", "Newest"])
+		created.push(await owner.projects.create.mutate({ title }));
+	const firstPage = await owner.projects.list.query({ limit: 2 });
+	const secondPage = await owner.projects.list.query({
+		limit: 2,
+		cursor: firstPage.nextCursor,
+	});
+	expect(
+		[...firstPage.items, ...secondPage.items].map((project) => project.title),
+	).toEqual(["Newest", "Middle", "Oldest"]);
+	expect(secondPage.nextCursor).toBeUndefined();
+});
+
 test("project and brief history pages do not omit or repeat saved records", async () => {
 	const owner = client(await workspace.signIn("pages"));
 	const firstProject = await owner.projects.create.mutate({

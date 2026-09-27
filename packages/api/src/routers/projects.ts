@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Database, Transaction } from "@blankfolio/db";
 import { briefRevision, researchProject } from "@blankfolio/db/schema/projects";
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, gt, lt, ne } from "drizzle-orm";
+import { and, desc, eq, lt, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure, router } from "../index";
 import { requireProject } from "../project-lifecycle";
@@ -131,10 +131,12 @@ export const projectsRouter = router({
 						eq(researchProject.ownerId, ctx.session.user.id),
 						ne(researchProject.state, "deleting"),
 						input.state ? eq(researchProject.state, input.state) : undefined,
-						input.cursor ? gt(researchProject.id, input.cursor) : undefined,
+						input.cursor
+							? sql`(${researchProject.createdAt}, ${researchProject.id}) < (select created_at, id from research_project where id = ${input.cursor})`
+							: undefined,
 					),
 				)
-				.orderBy(asc(researchProject.id))
+				.orderBy(desc(researchProject.createdAt), desc(researchProject.id))
 				.limit(input.limit + 1);
 			const hasMore = items.length > input.limit;
 			if (hasMore) items.pop();
