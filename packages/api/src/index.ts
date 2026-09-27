@@ -2,7 +2,18 @@ import { initTRPC, TRPCError } from "@trpc/server";
 
 import type { Context } from "./context";
 
-export const t = initTRPC.context<Context>().create();
+export const t = initTRPC.context<Context>().create({
+	errorFormatter({ shape, error }) {
+		return {
+			...shape,
+			message:
+				error.code === "INTERNAL_SERVER_ERROR"
+					? "Research operation failed. Try again later."
+					: shape.message,
+			data: { ...shape.data, stack: undefined },
+		};
+	},
+});
 
 export const router = t.router;
 
