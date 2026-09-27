@@ -1,33 +1,36 @@
 {
-  "name": "server",
-  "type": "module",
-  "main": "src/index.ts",
-  "scripts": {
-    "build": "tsdown",
-    "check-types": "tsc --noEmit",
-    "compile": "bun build --compile --no-compile-autoload-dotenv --minify --sourcemap --bytecode ./src/index.ts --outfile server",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.mjs",
-    "env:generate": "varlock codegen",
-    "auth:generate": "varlock run -- pnpm dlx auth@latest generate --config src/services.ts --output ../../packages/db/src/schema/auth.ts --yes"
-  },
-  "dependencies": {
-    "@blankfolio/api": "workspace:*",
-    "@blankfolio/auth": "workspace:*",
-    "@blankfolio/db": "workspace:*",
-    "@hono/node-server": "^2.1.1",
-    "@hono/trpc-server": "^0.4.2",
-    "@trpc/server": "catalog:",
-    "better-auth": "catalog:",
-    "hono": "^4.13.7",
-    "varlock": "catalog:",
-    "zod": "catalog:"
-  },
-  "devDependencies": {
-    "@blankfolio/config": "workspace:*",
-    "@types/node": "catalog:",
-    "tsdown": "^0.23.0",
-    "tsx": "catalog:",
-    "typescript": "^6.0.3"
-  }
+	"name": "server",
+	"type": "module",
+	"main": "src/index.ts",
+	"scripts": {
+		"build": "tsdown",
+		"check-types": "tsc --noEmit",
+		"compile": "bun build --compile --no-compile-autoload-dotenv --minify --sourcemap --bytecode ./src/start.ts --outfile server",
+		"dev": "tsx watch src/start.ts",
+		"start": "node dist/start.mjs",
+		"env:generate": "varlock codegen",
+		"auth:generate": "varlock run -- pnpm dlx auth@latest generate --config src/services.ts --output ../../packages/db/src/schema/auth.ts --yes",
+		"test": "cd ../.. && pnpm test"
+	},
+	"dependencies": {
+		"@blankfolio/api": "workspace:*",
+		"@blankfolio/auth": "workspace:*",
+		"@blankfolio/db": "workspace:*",
+		"@hono/node-server": "^2.1.1",
+		"@hono/trpc-server": "^0.4.2",
+		"@trpc/server": "catalog:",
+		"better-auth": "catalog:",
+		"hono": "^4.13.7",
+		"varlock": "catalog:",
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@blankfolio/config": "workspace:*",
+		"@trpc/client": "^11.19.0",
+		"@types/node": "catalog:",
+		"tsdown": "^0.23.0",
+		"tsx": "catalog:",
+		"typescript": "^6.0.3",
+		"vitest": "^5.0.2"
+	}
 }
