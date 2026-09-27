@@ -1106,6 +1106,39 @@ body {
 	margin-top: 0.7rem;
 }
 
+.account-state {
+	max-width: 34rem;
+	margin: 0 auto;
+	padding: 2rem;
+	border: 1px solid var(--folio-rule);
+	background: var(--card);
+}
+
+.account-state .display-title {
+	font-size: clamp(2rem, 4.5vw, 2.8rem);
+}
+
+.account-state > p:not(.eyebrow),
+.account-state .form-note {
+	color: var(--folio-soft-ink);
+	font-size: 0.8rem;
+	line-height: 1.6;
+}
+
+.account-form {
+	display: grid;
+	gap: 0.9rem;
+	margin-top: 1.25rem;
+}
+
+.account-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.75rem;
+	margin-top: 1.25rem;
+}
+
 .latest-brief-panel {
 	margin-top: 0.2rem;
 	padding: 0.8rem;
@@ -1178,6 +1211,10 @@ body {
 		min-height: 58px;
 		gap: 0.45rem;
 		padding: 0 0.8rem;
+	}
+
+	.account-state {
+		padding: 1.25rem;
 	}
 
 	.site-header-primary {
