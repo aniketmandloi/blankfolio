@@ -24,18 +24,12 @@ import { trpc } from "@/utils/trpc";
 type ProjectDetailData = inferRouterOutputs<AppRouter>["projects"]["get"];
 type HistoryEntry = ProjectDetailData["history"][number];
 
-type BriefFields = {
-	title: string;
-	topic: string;
-	experienceLevel: string;
-	timeAvailability: string;
-	computeDescription: string;
-	desiredContribution: string;
-};
+type BriefFields = ProjectDetailData["brief"];
 
 type BriefField = keyof BriefFields;
 
 const briefFieldLabels: Record<BriefField, string> = {
+	evaluationTrack: "Topic track",
 	title: "Working title",
 	topic: "Research topic and question",
 	experienceLevel: "Experience level",
@@ -43,6 +37,29 @@ const briefFieldLabels: Record<BriefField, string> = {
 	computeDescription: "Compute and materials",
 	desiredContribution: "Desired contribution",
 };
+
+const evaluationTrackLabels = {
+	unknown: "Not specified",
+	"tabular-classification": "Tabular classification in empirical predictive ML",
+	"outside-track": "Another topic, outside the initial evaluation track",
+};
+
+function BriefDisplay({ brief }: { brief: BriefFields }) {
+	return (
+		<dl className="revision-fields">
+			{(Object.keys(briefFieldLabels) as BriefField[]).map((field) => (
+				<div key={field}>
+					<dt>{briefFieldLabels[field]}</dt>
+					<dd>
+						{field === "evaluationTrack"
+							? evaluationTrackLabels[brief.evaluationTrack]
+							: displayValue(brief[field])}
+					</dd>
+				</div>
+			))}
+		</dl>
+	);
+}
 
 function formValues(brief: BriefFields): BriefFields {
 	return {
@@ -78,6 +95,7 @@ function errorText(error: unknown) {
 
 function sameBrief(left: BriefFields, right: BriefFields) {
 	return (
+		left.evaluationTrack === right.evaluationTrack &&
 		left.title === right.title &&
 		left.topic === right.topic &&
 		left.experienceLevel === right.experienceLevel &&
@@ -139,7 +157,8 @@ export default function ProjectOverview({ id }: { id: string }) {
 		unarchiveProject.isPending ||
 		deleteProject.isPending;
 	const storedBriefLength = draft
-		? draft.title.length +
+		? draft.evaluationTrack.length +
+			draft.title.length +
 			draft.topic.length +
 			[
 				draft.experienceLevel,
@@ -407,6 +426,33 @@ export default function ProjectOverview({ id }: { id: string }) {
 									disabled={readOnly || saveBrief.isPending}
 								>
 									<div className="field-stack">
+										<Label htmlFor="brief-track">Topic track</Label>
+										<select
+											id="brief-track"
+											className="h-8 w-full min-w-0 rounded-none border px-2 outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
+											value={briefFields.evaluationTrack}
+											onChange={(event) =>
+												updateDraft("evaluationTrack", event.target.value)
+											}
+											aria-describedby="evaluation-track-hint"
+										>
+											{Object.entries(evaluationTrackLabels).map(
+												([value, label]) => (
+													<option key={value} value={value}>
+														{label}
+													</option>
+												),
+											)}
+										</select>
+										<p className="field-caption" id="evaluation-track-hint">
+											{briefFields.evaluationTrack === "outside-track"
+												? "This topic is outside the initial evaluation track; support has not been validated for it."
+												: briefFields.evaluationTrack === "unknown"
+													? "The initial evaluation scope is empirical predictive ML, starting with tabular classification. Choose your topic track; it is not inferred from your text."
+													: "Within the initial evaluation scope. Scientific readiness still requires expert evaluation."}
+										</p>
+									</div>
+									<div className="field-stack">
 										<Label htmlFor="brief-title">Working title</Label>
 										<Input
 											id="brief-title"
@@ -587,17 +633,7 @@ export default function ProjectOverview({ id }: { id: string }) {
 													<summary>
 														Latest saved revision · {project.revision}
 													</summary>
-													<dl className="revision-fields">
-														{Object.keys(briefFieldLabels).map((field) => {
-															const key = field as BriefField;
-															return (
-																<div key={key}>
-																	<dt>{briefFieldLabels[key]}</dt>
-																	<dd>{displayValue(project.brief[key])}</dd>
-																</div>
-															);
-														})}
-													</dl>
+													<BriefDisplay brief={project.brief} />
 												</details>
 											)}
 										</div>
@@ -657,17 +693,7 @@ export default function ProjectOverview({ id }: { id: string }) {
 													{formatDate(revision.createdAt)}
 												</time>
 											</summary>
-											<dl className="revision-fields">
-												{Object.keys(briefFieldLabels).map((field) => {
-													const key = field as BriefField;
-													return (
-														<div key={key}>
-															<dt>{briefFieldLabels[key]}</dt>
-															<dd>{displayValue(revision.brief[key])}</dd>
-														</div>
-													);
-												})}
-											</dl>
+											<BriefDisplay brief={revision.brief} />
 										</details>
 									))}
 								</div>

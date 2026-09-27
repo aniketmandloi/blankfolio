@@ -334,6 +334,7 @@ body {
 }
 
 .folio-page input,
+.folio-page select,
 .folio-page textarea {
 	border-color: var(--folio-rule);
 	background: color-mix(in srgb, var(--card) 82%, transparent);

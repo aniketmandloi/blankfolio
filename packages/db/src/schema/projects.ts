@@ -45,6 +45,7 @@ export const researchProject = pgTable(
 );
 
 export type ResearchBrief = {
+	evaluationTrack?: "unknown" | "tabular-classification" | "outside-track";
 	title: string;
 	topic: string;
 	experienceLevel: string;

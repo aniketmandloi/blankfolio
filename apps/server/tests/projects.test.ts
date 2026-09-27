@@ -37,6 +37,21 @@ test("a researcher saves an incomplete private Research Project and returns to i
 	).toContain(project.id);
 });
 
+test("a researcher records whether the topic is outside the initial evaluation track", async () => {
+	const owner = client(await workspace.signIn("topic-track"));
+	const project = await owner.projects.create.mutate({});
+	expect(project.brief.evaluationTrack).toBe("unknown");
+	const saved = await owner.projects.saveBrief.mutate({
+		id: project.id,
+		expectedRevision: 1,
+		brief: { ...project.brief, evaluationTrack: "outside-track" },
+	});
+	expect(saved.brief.evaluationTrack).toBe("outside-track");
+	const reopened = await owner.projects.get.query({ id: project.id });
+	expect(reopened.brief.evaluationTrack).toBe("outside-track");
+	expect(reopened.history.at(-1)?.brief.evaluationTrack).toBe("unknown");
+});
+
 test("brief revisions survive reopening and a stale tab cannot overwrite a saved brief", async () => {
 	const owner = client(await workspace.signIn("revisions"));
 	const project = await owner.projects.create.mutate({

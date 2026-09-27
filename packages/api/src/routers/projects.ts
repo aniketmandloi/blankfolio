@@ -13,6 +13,9 @@ const constraintField = z
 	.transform((value) => (value.trim() ? value : "unknown"));
 export const briefSchema = z
 	.object({
+		evaluationTrack: z
+			.enum(["unknown", "tabular-classification", "outside-track"])
+			.default("unknown"),
 		title: z.string().max(120, "Title must be 120 characters or fewer"),
 		topic: z.string().max(2_000, "Topic must be 2,000 characters or fewer"),
 		experienceLevel: constraintField,
@@ -76,7 +79,16 @@ async function historyPage(
 		.limit(limit + 1);
 	const hasMore = items.length > limit;
 	if (hasMore) items.pop();
-	return { items, nextCursor: hasMore ? items.at(-1)?.revision : undefined };
+	return {
+		items: items.map((item) => ({
+			...item,
+			brief: {
+				...item.brief,
+				evaluationTrack: item.brief.evaluationTrack ?? "unknown",
+			},
+		})),
+		nextCursor: hasMore ? items.at(-1)?.revision : undefined,
+	};
 }
 export const projectsRouter = router({
 	history: protectedProcedure
@@ -134,6 +146,7 @@ export const projectsRouter = router({
 			ctx.db.transaction(async (tx) => {
 				const id = randomUUID();
 				const brief = {
+					evaluationTrack: "unknown" as const,
 					title: input.title,
 					topic: "",
 					experienceLevel: "unknown",
