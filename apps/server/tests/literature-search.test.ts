@@ -934,5 +934,10 @@ scenario(
 			memberships: 0,
 			usage: 20_000,
 		});
+		const sharedPapers = await workspace.db.$client.query(
+			"SELECT count(*)::int AS papers FROM paper WHERE strpos(title || coalesce(doi, '') || coalesce(url, ''), $1) > 0",
+			[secret],
+		);
+		expect(sharedPapers.rows[0]).toEqual({ papers: 0 });
 	},
 );

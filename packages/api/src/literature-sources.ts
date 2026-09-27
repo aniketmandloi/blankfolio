@@ -50,9 +50,10 @@ const digest = (text: string) =>
 	createHash("sha256").update(text).digest("hex").slice(0, 12);
 
 /**
- * Deterministic, free stand-ins for literature providers. Queries containing
- * `fixture:<behavior>` (or `fixture:<catalog|metered>-<behavior>` for one source) select
- * empty, partial, broad, cached, flaky, outage or uncertain outcomes.
+ * Deterministic, free stand-ins for literature providers. Records name a query only by its
+ * digest: papers are shared public facts that outlive the private project that searched them.
+ * Queries containing `fixture:<behavior>` (or `fixture:<catalog|metered>-<behavior>` for one
+ * source) select empty, partial, broad, cached, flaky, outage or uncertain outcomes.
  */
 function fixtureSource(
 	id: string,
@@ -95,7 +96,7 @@ function fixtureSource(
 				for (let i = 0; i < perQuery; i++)
 					discovery.push({
 						key: `fixture:${hash}:${i}`,
-						title: `Fixture study ${i + 1}: ${query.slice(0, 80)}`,
+						title: `Fixture study ${i + 1} for query ${hash}`,
 						authors: ["A. Fixture", "B. Example"],
 						year: toYear - (i % (toYear - fromYear + 1)),
 						doi: `10.5555/fixture.${hash}.${i}`,
@@ -105,7 +106,7 @@ function fixtureSource(
 				for (let i = 0; i < foundations; i++)
 					older.push({
 						key: `fixture:${hash}:foundation:${i}`,
-						title: `Foundational fixture ${i + 1}: ${query.slice(0, 80)}`,
+						title: `Foundational fixture ${i + 1} for query ${hash}`,
 						authors: ["C. Precedent"],
 						year: fromYear - 5 - i,
 						doi: `10.5555/fixture.${hash}.foundation.${i}`,
