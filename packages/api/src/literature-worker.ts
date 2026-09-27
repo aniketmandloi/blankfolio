@@ -46,7 +46,10 @@ type Execution = typeof sourceExecution.$inferSelect;
 type Failure = { outcome: "failed"; errorClass: string };
 
 /** Project tombstone/archive and account eligibility, re-checked before every stage. */
-async function guard(tx: Transaction, job: Job): Promise<CancelReason | null> {
+async function guard(
+	tx: Transaction,
+	job: Pick<Job, "ownerId" | "projectId">,
+): Promise<CancelReason | null> {
 	try {
 		await requireProject(tx, job.ownerId, job.projectId, "write");
 	} catch (error) {
@@ -56,6 +59,37 @@ async function guard(tx: Transaction, job: Job): Promise<CancelReason | null> {
 	return (await pilotAccessStatus(tx, job.ownerId)) === "eligible"
 		? null
 		: "access-withdrawn";
+}
+
+/**
+ * Locks the project before the job, the order archive, deletion and cancellation use, so a
+ * worker waiting on a project never holds its job's lock. Cancels a job its project or account
+ * may no longer run; returns it only while it is still queued or running.
+ */
+async function lockActiveJob(tx: Transaction, jobId: string) {
+	const [ref] = await tx
+		.select({ ownerId: researchJob.ownerId, projectId: researchJob.projectId })
+		.from(researchJob)
+		.where(eq(researchJob.id, jobId));
+	if (!ref) return null;
+	const cancelled = await guard(tx, ref);
+	const [job] = await tx
+		.select()
+		.from(researchJob)
+		.where(eq(researchJob.id, jobId))
+		.for("update");
+	if (!job || (job.state !== "queued" && job.state !== "running")) return null;
+	if (!cancelled) return job;
+	await tx
+		.update(researchJob)
+		.set({
+			state: "cancelled",
+			cancelReason: cancelled,
+			finishedAt: new Date(),
+			updatedAt: new Date(),
+		})
+		.where(eq(researchJob.id, jobId));
+	return null;
 }
 
 export function createLiteratureWorker({
@@ -69,26 +103,8 @@ export function createLiteratureWorker({
 	/** Returns the job only while it may still run another stage. */
 	async function claim(jobId: string) {
 		return db.transaction(async (tx) => {
-			const [job] = await tx
-				.select()
-				.from(researchJob)
-				.where(eq(researchJob.id, jobId))
-				.for("update");
-			if (!job || (job.state !== "queued" && job.state !== "running"))
-				return null;
-			const cancelled = await guard(tx, job);
-			if (cancelled) {
-				await tx
-					.update(researchJob)
-					.set({
-						state: "cancelled",
-						cancelReason: cancelled,
-						finishedAt: new Date(),
-						updatedAt: new Date(),
-					})
-					.where(eq(researchJob.id, jobId));
-				return null;
-			}
+			const job = await lockActiveJob(tx, jobId);
+			if (!job) return null;
 			if (job.state === "queued") {
 				const { scope } = job.input;
 				const allocation = Math.floor(recordCap / scope.sources.length);
@@ -253,13 +269,8 @@ export function createLiteratureWorker({
 
 	async function publish(jobId: string) {
 		await db.transaction(async (tx) => {
-			const [job] = await tx
-				.select()
-				.from(researchJob)
-				.where(eq(researchJob.id, jobId))
-				.for("update");
+			const job = await lockActiveJob(tx, jobId);
 			if (job?.state !== "running") return;
-			const cancelled = await guard(tx, job);
 			const executions = await tx
 				.select()
 				.from(sourceExecution)
@@ -268,13 +279,6 @@ export function createLiteratureWorker({
 				(execution) => execution.status !== "failed",
 			);
 			const done = { finishedAt: new Date(), updatedAt: new Date() };
-			if (cancelled) {
-				await tx
-					.update(researchJob)
-					.set({ state: "cancelled", cancelReason: cancelled, ...done })
-					.where(eq(researchJob.id, jobId));
-				return;
-			}
 			if (answered.length === 0) {
 				await tx
 					.update(researchJob)

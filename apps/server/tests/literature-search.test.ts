@@ -585,6 +585,46 @@ scenario(
 	},
 );
 
+scenario(
+	"a worker blocked on an archiving project's lock holds no job lock, so the two cannot deadlock",
+	async (workspace) => {
+		const researcher = client(workspace, await workspace.signIn("lock-order"));
+		const projectId = await readyProject(researcher, "Lock order");
+		await saveScope(researcher, projectId);
+		const job = await submit(researcher, projectId);
+		// Archive's own order: the project row first, then its active jobs.
+		const archiving = await workspace.db.$client.connect();
+		try {
+			await archiving.query("BEGIN");
+			await archiving.query(
+				"SELECT id FROM research_project WHERE id = $1 FOR UPDATE",
+				[projectId],
+			);
+			const worker = workspace.runNextJob();
+			await new Promise((resolve) => setTimeout(resolve, 2_000));
+			await archiving.query(
+				"UPDATE research_job SET state = 'cancelled', cancel_reason = 'archived' WHERE project_id = $1 AND state IN ('queued', 'running')",
+				[projectId],
+			);
+			await archiving.query(
+				"UPDATE research_project SET state = 'archived' WHERE id = $1",
+				[projectId],
+			);
+			await archiving.query("COMMIT");
+			await worker;
+		} finally {
+			archiving.release();
+		}
+		const delivered = (
+			await workspace.boss.findJobs<{ jobId: string }>(literatureSearchQueue)
+		).filter((queued) => queued.data.jobId === job.id);
+		expect(delivered.map((queued) => queued.state)).toEqual(["completed"]);
+		expect(
+			await researcher.literature.job.query({ projectId, jobId: job.id }),
+		).toMatchObject({ state: "cancelled", cancelReason: "archived" });
+	},
+);
+
 async function eligibleResearcher(workspace: Workspace, name: string) {
 	const email = `${name}-${randomUUID()}@example.test`;
 	await workspace.invite(email);
