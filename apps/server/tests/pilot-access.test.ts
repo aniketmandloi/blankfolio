@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { changePilotAccess } from "@blankfolio/api/pilot-access";
+import {
+	changePilotAccess,
+	pilotAccessHistory,
+} from "@blankfolio/api/pilot-access";
 import type { AppRouter } from "@blankfolio/api/routers/index";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { afterAll, beforeAll, expect, test } from "vitest";
@@ -162,4 +165,60 @@ test("a session whose email is not verified cannot use research operations", asy
 		project.id,
 		"Verify your email address before opening Research Projects.",
 	);
+});
+
+test("operators change eligibility for a normalized email with an actor, time and reason audit record", async () => {
+	const local = `Mixed.Case-${randomUUID()}`;
+	const email = `${local}@example.test`.toLowerCase();
+	const before = new Date();
+	await changePilotAccess(workspace.db, {
+		action: "invite",
+		email: `  ${local}@Example.TEST `,
+		actor: "operator@lab.example",
+		reason: "Pilot cohort A",
+	});
+	const researcher = await verifiedSession(email);
+	expect(await researcher.account.access.query()).toEqual({
+		status: "eligible",
+	});
+	await changePilotAccess(workspace.db, {
+		action: "revoke",
+		email: email.toUpperCase(),
+		actor: "second-operator@lab.example",
+		reason: "Left the pilot",
+	});
+	const history = await pilotAccessHistory(workspace.db, ` ${email} `);
+	expect(history).toMatchObject([
+		{
+			action: "revoke",
+			email,
+			actor: "second-operator@lab.example",
+			reason: "Left the pilot",
+		},
+		{
+			action: "invite",
+			email,
+			actor: "operator@lab.example",
+			reason: "Pilot cohort A",
+		},
+	]);
+	for (const event of history)
+		expect(event.createdAt.getTime()).toBeGreaterThanOrEqual(
+			before.getTime() - 60_000,
+		);
+	for (const incomplete of [
+		{ actor: "operator@lab.example", reason: "  " },
+		{ actor: "", reason: "Missing operator" },
+	])
+		await expect(
+			changePilotAccess(workspace.db, {
+				action: "invite",
+				email,
+				...incomplete,
+			}),
+		).rejects.toThrow();
+	expect(await pilotAccessHistory(workspace.db, email)).toHaveLength(2);
+	expect(await researcher.account.access.query()).toEqual({
+		status: "revoked",
+	});
 });

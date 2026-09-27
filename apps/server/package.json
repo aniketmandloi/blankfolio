@@ -9,6 +9,7 @@
 		"dev": "tsx watch src/start.ts",
 		"start": "node dist/start.mjs",
 		"env:generate": "varlock codegen",
+		"pilot:access": "tsx src/pilot-access.ts",
 		"auth:generate": "varlock run -- pnpm dlx auth@latest generate --config src/services.ts --output ../../packages/db/src/schema/auth.ts --yes",
 		"test": "cd ../.. && pnpm test"
 	},
