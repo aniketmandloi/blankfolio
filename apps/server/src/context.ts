@@ -12,6 +12,8 @@ export async function createContext({
 	return {
 		db: services.db,
 		projectCleanup: services.projectCleanup,
+		jobQueue: services.jobQueue,
+		sourcePrices: services.sourcePrices,
 		session: await services.auth.api.getSession({
 			headers: context.req.raw.headers,
 		}),

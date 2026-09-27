@@ -358,6 +358,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.3
+      pg-boss:
+        specifier: ^12.34.0
+        version: 12.34.0
       tsdown:
         specifier: ^0.23.0
         version: 0.23.0(tsx@4.23.15)(typescript@6.0.3)

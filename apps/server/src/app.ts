@@ -1,7 +1,9 @@
+import type { SourcePrices } from "@blankfolio/api/literature-sources";
 import {
 	createProjectCleanupRegistry,
 	type ProjectCleanupRegistry,
 } from "@blankfolio/api/project-lifecycle";
+import type { JobQueue } from "@blankfolio/api/research-jobs";
 import { appRouter } from "@blankfolio/api/routers/index";
 import type { Session } from "@blankfolio/auth";
 import type { Database } from "@blankfolio/db";
@@ -20,6 +22,8 @@ export type ApplicationServices = {
 		};
 	};
 	corsOrigin: string;
+	jobQueue: JobQueue;
+	sourcePrices: SourcePrices;
 	projectCleanup?: ProjectCleanupRegistry;
 };
 /** Importable request application: no sockets, environment loading, or global services. */

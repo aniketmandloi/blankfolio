@@ -1,9 +1,11 @@
 import { protectedProcedure, publicProcedure, router } from "../index";
 import { accountRouter } from "./account";
+import { literatureRouter } from "./literature";
 import { projectsRouter } from "./projects";
 
 export const appRouter = router({
 	account: accountRouter,
+	literature: literatureRouter,
 	projects: projectsRouter,
 	healthCheck: publicProcedure.query(() => {
 		return "OK";

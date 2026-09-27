@@ -1,12 +1,27 @@
 import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
+import type { SourcePrices } from "@blankfolio/api/literature-sources";
+import {
+	createLiteratureJobHandler,
+	type LiteratureJobData,
+	type LiteratureWorkerOptions,
+} from "@blankfolio/api/literature-worker";
 import { changePilotAccess } from "@blankfolio/api/pilot-access";
+import {
+	createJobQueue,
+	installJobQueues,
+	literatureSearchQueue,
+	literatureWorkOptions,
+} from "@blankfolio/api/research-jobs";
 import { type AuthConfig, type AuthMail, createAuth } from "@blankfolio/auth";
 import { createDb } from "@blankfolio/db";
+import { PgBoss } from "pg-boss";
 import { createApp } from "../src/app";
 
 const password = "Disposable-only-Password-123!";
 const origin = "http://localhost";
+/** $0.02 per query request for the simulated metered source. */
+export const fixturePrices: SourcePrices = { "fixture-metered": 20_000 };
 
 /** No sockets, production environment files, real mail, or fallback to DATABASE_URL. */
 export async function createTestWorkspace() {
@@ -23,15 +38,27 @@ export async function createTestWorkspace() {
 		throw new Error(
 			"TEST_DATABASE_URL must be a direct/non-pooler PostgreSQL connection.",
 		);
-	const schema = `test_projects_${randomUUID().replaceAll("-", "")}`;
+	const suffix = randomUUID().replaceAll("-", "");
+	const schema = `test_projects_${suffix}`;
+	const jobSchema = `test_jobs_${suffix}`;
 	const admin = createDb({ DATABASE_URL: url });
 	const db = createDb({ DATABASE_URL: url }, { schema });
+	const boss = new PgBoss({
+		connectionString: url,
+		schema: jobSchema,
+		max: 2,
+		supervise: false,
+		schedule: false,
+	});
 	let schemaCreated = false;
 	const close = async () => {
+		await boss.stop({ graceful: false }).catch(() => undefined);
 		await db.$client.end();
 		try {
 			if (schemaCreated)
-				await admin.$client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+				await admin.$client.query(
+					`DROP SCHEMA IF EXISTS "${schema}" CASCADE; DROP SCHEMA IF EXISTS "${jobSchema}" CASCADE`,
+				);
 		} finally {
 			await admin.$client.end();
 		}
@@ -57,8 +84,14 @@ export async function createTestWorkspace() {
 				),
 			);
 		}
+		await boss.start();
+		await installJobQueues(boss);
+		const jobQueue = createJobQueue(boss);
 		const mail: AuthMail[] = [];
-		const createAuthApp = (env: Partial<AuthConfig> = {}) =>
+		const createAuthApp = (
+			env: Partial<AuthConfig> = {},
+			sourcePrices = fixturePrices,
+		) =>
 			createApp({
 				db,
 				auth: createAuth(
@@ -74,6 +107,8 @@ export async function createTestWorkspace() {
 					},
 				),
 				corsOrigin: env.CORS_ORIGIN ?? origin,
+				jobQueue,
+				sourcePrices,
 			});
 		const app = createAuthApp();
 		const post = (path: string, body: unknown) =>
@@ -109,9 +144,40 @@ export async function createTestWorkspace() {
 				throw new Error(`Fixture sign-in failed: HTTP ${response.status}`);
 			return cookie.split(";")[0] ?? "";
 		};
+		/**
+		 * Claims one queued job through pg-boss and runs the production handler, failing it back to
+		 * the queue when the handler throws, as a worker process would. Ignores retry delays.
+		 */
+		const runNextJob = async (
+			options: Partial<LiteratureWorkerOptions> = {},
+		) => {
+			const jobs = await boss.fetch<LiteratureJobData>(literatureSearchQueue, {
+				...literatureWorkOptions,
+				ignoreStartAfter: true,
+			});
+			if (!jobs.length) return false;
+			const ids = jobs.map((job) => job.id);
+			try {
+				await createLiteratureJobHandler({
+					db,
+					prices: fixturePrices,
+					sleep: async () => undefined,
+					...options,
+				})(jobs);
+				await boss.complete(literatureSearchQueue, ids);
+			} catch {
+				await boss.fail(literatureSearchQueue, ids);
+			}
+			return true;
+		};
 		return {
 			db,
 			app,
+			boss,
+			runNextJob,
+			async runQueuedJobs(options: Partial<LiteratureWorkerOptions> = {}) {
+				while (await runNextJob(options));
+			},
 			mail,
 			close,
 			createAuthApp,

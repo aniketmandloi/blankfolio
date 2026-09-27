@@ -29,6 +29,7 @@
 		"@blankfolio/config": "workspace:*",
 		"@trpc/client": "catalog:",
 		"@types/node": "catalog:",
+		"pg-boss": "^12.34.0",
 		"tsdown": "^0.23.0",
 		"tsx": "catalog:",
 		"typescript": "^6.0.3",
