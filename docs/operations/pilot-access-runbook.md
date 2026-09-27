@@ -49,7 +49,7 @@ The auth instance no longer forces `SameSite=None; Secure`. It uses Better Auth'
 
 - **Direct local access** (`BETTER_AUTH_URL=http://localhost:3000/api/auth`, `CORS_ORIGIN=http://localhost:3001`, web `NEXT_PUBLIC_SERVER_URL=http://localhost:3000`): `better-auth.session_token`, `HttpOnly; SameSite=Lax`, not `Secure`. Both ports are the same site, so every browser (including Safari) keeps the cookie over plain HTTP.
 - **Deployed same origin** (`/api` routed to the Hono service; `BETTER_AUTH_URL=https://<origin>/api/auth`): `__Secure-better-auth.session_token`, `HttpOnly; SameSite=Lax; Secure`.
-- **Origin checks** are explicitly enabled (Better Auth otherwise skips them under test runners). Auth requests carrying cookies or browser fetch metadata from an origin other than `CORS_ORIGIN` or the native schemes are rejected with `403`. `SameSite=Lax` keeps cookies off cross-site tRPC mutations.
+- **Origin checks** are explicitly enabled (Better Auth otherwise skips them under test runners). Auth requests carrying cookies or browser fetch metadata from an origin other than `CORS_ORIGIN` or the native schemes are rejected with `403`. `SameSite=Lax` keeps cookies off cross-site tRPC mutations, and tRPC form-type posts (which browsers send without a preflight, including from same-site sibling origins) are refused unless they come from `CORS_ORIGIN`.
 - **SSR** pages forward the incoming request headers to `/api/auth/get-session`; this works with host-only cookies because the forwarded `Cookie` header is sent explicitly.
 - **Native** clients keep the Expo plugin and trusted `blankfolio://`, `exp://` and `http://localhost:8081` origins. Native sign-up now also requires email verification; the native scaffold has no verification screen yet.
 

@@ -392,3 +392,15 @@ test("same-origin https deployments use Secure-prefixed Lax cookies, forward SSR
 	);
 	expect(await research.json()).toMatchObject({ result: { data: {} } });
 });
+
+test("research mutations refuse form posts from another origin that carry the session cookie", async () => {
+	const cookie = await workspace.signIn("form-post");
+	const formPost = (origin: string) =>
+		workspace.app.request("http://localhost/trpc/projects.create", {
+			method: "POST",
+			headers: { cookie, origin },
+			body: new FormData(),
+		});
+	expect((await formPost("http://sibling.localhost")).status).toBe(403);
+	expect((await client(cookie).projects.list.query({})).items).toEqual([]);
+});

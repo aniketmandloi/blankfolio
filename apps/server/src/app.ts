@@ -8,6 +8,7 @@ import type { Database } from "@blankfolio/db";
 import { trpcServer } from "@hono/trpc-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { csrf } from "hono/csrf";
 import { createContext } from "./context";
 
 export type ApplicationServices = {
@@ -40,6 +41,8 @@ export function createApp(services: ApplicationServices) {
 	app.on(["POST", "GET"], "/api/auth/*", (c) =>
 		services.auth.handler(c.req.raw),
 	);
+	// tRPC accepts multipart bodies, which browsers post cross-origin without a preflight.
+	app.use("/trpc/*", csrf({ origin: services.corsOrigin }));
 	app.use(
 		"/trpc/*",
 		trpcServer({
