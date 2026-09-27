@@ -321,3 +321,74 @@ test("expired verification and recovery links return to a state that can request
 	}
 	expect((await workspace.signInWith(email)).status).toBe(403);
 });
+
+const sessionCookieAttributes = (response: Response) =>
+	response.headers
+		.getSetCookie()
+		.find((cookie) => cookie.includes("better-auth.session_token="))
+		?.split(";")
+		.slice(1)
+		.map((attribute) => attribute.trim().split("=")[0]?.toLowerCase())
+		.sort();
+
+test("direct local API sessions use Lax cookies that a plain-http browser keeps", async () => {
+	const email = address("local-cookie");
+	await workspace.invite(email);
+	await workspace.signUp(email);
+	await workspace.followLatestMail(email, "verification");
+	const signedIn = await workspace.signInWith(email);
+	expect(signedIn.headers.get("set-cookie")).toMatch(
+		/^better-auth\.session_token=/,
+	);
+	expect(sessionCookieAttributes(signedIn)).toEqual([
+		"httponly",
+		"max-age",
+		"path",
+		"samesite",
+	]);
+	expect(signedIn.headers.get("set-cookie")).toMatch(/SameSite=Lax/);
+});
+
+test("same-origin https deployments use Secure-prefixed Lax cookies, forward SSR cookies and reject foreign origins", async () => {
+	const deployed = "https://pilot.example";
+	const app = workspace.createAuthApp({
+		BETTER_AUTH_URL: `${deployed}/api/auth`,
+		CORS_ORIGIN: deployed,
+	});
+	const email = address("deployed-cookie");
+	await workspace.invite(email);
+	await workspace.signUp(email);
+	await workspace.followLatestMail(email, "verification");
+	const signIn = (origin: string) =>
+		app.request(`${deployed}/api/auth/sign-in/email`, {
+			method: "POST",
+			headers: { "content-type": "application/json", origin },
+			body: JSON.stringify({
+				email,
+				password: "Disposable-only-Password-123!",
+			}),
+		});
+	expect((await signIn("https://attacker.example")).status).toBe(403);
+	const signedIn = await signIn(deployed);
+	expect(signedIn.headers.get("set-cookie")).toMatch(
+		/^__Secure-better-auth\.session_token=/,
+	);
+	expect(sessionCookieAttributes(signedIn)).toEqual([
+		"httponly",
+		"max-age",
+		"path",
+		"samesite",
+		"secure",
+	]);
+	expect(signedIn.headers.get("set-cookie")).toMatch(/SameSite=Lax/);
+	const cookie = workspace.sessionCookie(signedIn);
+	const forwarded = await app.request(`${deployed}/api/auth/get-session`, {
+		headers: { cookie },
+	});
+	expect(await forwarded.json()).toMatchObject({ user: { email } });
+	const research = await app.request(
+		`${deployed}/trpc/projects.list?input=${encodeURIComponent("{}")}`,
+		{ headers: { cookie } },
+	);
+	expect(await research.json()).toMatchObject({ result: { data: {} } });
+});

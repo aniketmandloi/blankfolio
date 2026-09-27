@@ -48,13 +48,10 @@ export function createAuth(
 		},
 		secret: env.BETTER_AUTH_SECRET,
 		baseURL: env.BETTER_AUTH_URL,
-		advanced: {
-			defaultCookieAttributes: {
-				sameSite: "none",
-				secure: true,
-				httpOnly: true,
-			},
-		},
+		// Web and API share a site (same origin when deployed, localhost ports locally), so the
+		// default Lax cookies suffice; Secure and the __Secure- prefix follow an https base URL.
+		// Better Auth skips origin checks under test runners unless this is explicit.
+		advanced: { disableOriginCheck: false },
 		plugins: [expo()],
 	});
 }
