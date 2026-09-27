@@ -1,6 +1,7 @@
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 
+import PilotAccessGate from "@/components/pilot-access-gate";
 import { authClient } from "@/lib/auth-client";
 
 import ProjectOverview from "./project-overview";
@@ -28,5 +29,9 @@ export default async function ProjectPage({
 		notFound();
 	}
 
-	return <ProjectOverview id={id} />;
+	return (
+		<PilotAccessGate>
+			<ProjectOverview id={id} />
+		</PilotAccessGate>
+	);
 }

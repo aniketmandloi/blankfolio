@@ -6,14 +6,15 @@ import { toast } from "sonner";
 import z from "zod";
 
 import { authClient } from "@/lib/auth-client";
-import { queryClient } from "@/utils/trpc";
 
 import Loader from "./loader";
 
 export default function SignUpForm({
 	onSwitchToSignIn,
+	onRegistered,
 }: {
 	onSwitchToSignIn: () => void;
+	onRegistered: (email: string) => void;
 }) {
 	const { isPending } = authClient.useSession();
 
@@ -29,13 +30,10 @@ export default function SignUpForm({
 					email: value.email,
 					password: value.password,
 					name: value.name,
+					callbackURL: `${window.location.origin}/email-verified`,
 				},
 				{
-					onSuccess: () => {
-						queryClient.clear();
-						window.location.replace("/dashboard");
-						toast.success("Sign up successful");
-					},
+					onSuccess: () => onRegistered(value.email),
 					onError: (error) => {
 						toast.error(error.error.message || error.error.statusText);
 					},

@@ -2,6 +2,7 @@ import { Button } from "@blankfolio/ui/components/button";
 import { Input } from "@blankfolio/ui/components/input";
 import { Label } from "@blankfolio/ui/components/label";
 import { useForm } from "@tanstack/react-form";
+import Link from "next/link";
 import { toast } from "sonner";
 import z from "zod";
 
@@ -12,8 +13,12 @@ import Loader from "./loader";
 
 export default function SignInForm({
 	onSwitchToSignUp,
+	onUnverified,
+	notice,
 }: {
 	onSwitchToSignUp: () => void;
+	onUnverified: (email: string) => void;
+	notice?: string;
 }) {
 	const { isPending } = authClient.useSession();
 
@@ -35,6 +40,10 @@ export default function SignInForm({
 						toast.success("Sign in successful");
 					},
 					onError: (error) => {
+						if (error.error.code === "EMAIL_NOT_VERIFIED") {
+							onUnverified(value.email);
+							return;
+						}
 						toast.error(error.error.message || error.error.statusText);
 					},
 				},
@@ -55,6 +64,11 @@ export default function SignInForm({
 	return (
 		<div className="mx-auto mt-10 w-full max-w-md p-6">
 			<h1 className="mb-6 text-center font-bold text-3xl">Welcome Back</h1>
+			{notice && (
+				<p className="mb-4 text-center text-sm" role="status">
+					{notice}
+				</p>
+			)}
 
 			<form
 				onSubmit={(e) => {
@@ -128,7 +142,13 @@ export default function SignInForm({
 				</form.Subscribe>
 			</form>
 
-			<div className="mt-4 text-center">
+			<div className="mt-4 flex flex-col items-center gap-1">
+				<Link
+					href="/reset-password"
+					className="text-indigo-600 text-sm hover:text-indigo-800"
+				>
+					Forgot your password?
+				</Link>
 				<Button
 					variant="link"
 					onClick={onSwitchToSignUp}
