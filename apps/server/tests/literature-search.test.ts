@@ -6,6 +6,7 @@ import {
 } from "@blankfolio/api/literature-sources";
 import { changePilotAccess } from "@blankfolio/api/pilot-access";
 import {
+	createJobQueue,
 	literatureSearchQueue,
 	literatureWorkOptions,
 } from "@blankfolio/api/research-jobs";
@@ -16,7 +17,8 @@ import {
 	reserveUsage,
 } from "@blankfolio/api/usage-budget";
 import { createTRPCClient, httpLink } from "@trpc/client";
-import { expect, test } from "vitest";
+import { PgBoss } from "pg-boss";
+import { expect, test, vi } from "vitest";
 import { createTestWorkspace } from "./workspace-fixture";
 
 type Workspace = Awaited<ReturnType<typeof createTestWorkspace>>;
@@ -941,3 +943,24 @@ scenario(
 		expect(sharedPapers.rows[0]).toEqual({ papers: 0 });
 	},
 );
+
+test("a failed queue refresh in the API process is logged instead of crashing it", () => {
+	const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+	try {
+		const boss = new PgBoss({
+			connectionString: "postgres://127.0.0.1:1/unreachable",
+			supervise: false,
+			schedule: false,
+		});
+		createJobQueue(boss);
+		expect(() =>
+			boss.emit("error", new Error("Connection terminated unexpectedly")),
+		).not.toThrow();
+		expect(logged).toHaveBeenCalledWith(
+			"job_queue_error",
+			"Connection terminated unexpectedly",
+		);
+	} finally {
+		logged.mockRestore();
+	}
+});

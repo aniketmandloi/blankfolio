@@ -16,6 +16,8 @@ export type JobQueue = {
 	enqueue: (tx: Transaction, jobId: string) => Promise<void>;
 };
 export function createJobQueue(boss: PgBoss): JobQueue {
+	// A started boss refreshes its queue cache on a timer; an unheard "error" would crash the API.
+	boss.on("error", (error) => console.error("job_queue_error", error.message));
 	let started: Promise<unknown> | undefined;
 	return {
 		async enqueue(tx, jobId) {
