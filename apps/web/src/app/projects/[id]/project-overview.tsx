@@ -171,7 +171,12 @@ export default function ProjectOverview({ id }: { id: string }) {
 				0,
 			)
 		: 0;
-	const saveError = saveBrief.error ? errorText(saveBrief.error) : "";
+	const saveError =
+		storedBriefLength > 10_000
+			? "Research brief must be 10,000 characters or fewer. Shorten the text before saving."
+			: saveBrief.error
+				? errorText(saveBrief.error)
+				: "";
 	const conflictDetected = /conflict|another tab|revision/i.test(saveError);
 
 	useEffect(() => {
@@ -215,7 +220,10 @@ export default function ProjectOverview({ id }: { id: string }) {
 			!project ||
 			!draft ||
 			baseRevision === null ||
-			project.state === "archived"
+			project.state === "archived" ||
+			isActionPending ||
+			recoveryPending ||
+			saveBrief.isPending
 		)
 			return;
 
@@ -272,6 +280,7 @@ export default function ProjectOverview({ id }: { id: string }) {
 	}
 
 	async function refreshSavedRevision() {
+		if (saveBrief.isPending || isActionPending || recoveryPending) return;
 		setRecoveryPending(true);
 		setRecoveryNotice("");
 		setRecoveryError("");
@@ -301,7 +310,14 @@ export default function ProjectOverview({ id }: { id: string }) {
 	}
 
 	async function confirmProjectAction() {
-		if (!project || !pendingAction) return;
+		if (
+			!project ||
+			!pendingAction ||
+			saveBrief.isPending ||
+			recoveryPending ||
+			isActionPending
+		)
+			return;
 		setActionError("");
 		try {
 			if (pendingAction === "archive") {
@@ -423,7 +439,12 @@ export default function ProjectOverview({ id }: { id: string }) {
 							<form className="brief-form" onSubmit={submitBrief}>
 								<fieldset
 									className="brief-fieldset"
-									disabled={readOnly || saveBrief.isPending}
+									disabled={
+										readOnly ||
+										saveBrief.isPending ||
+										isActionPending ||
+										recoveryPending
+									}
 								>
 									<div className="field-stack">
 										<Label htmlFor="brief-track">Topic track</Label>
@@ -611,7 +632,11 @@ export default function ProjectOverview({ id }: { id: string }) {
 												type="button"
 												variant="outline"
 												className="folio-button folio-button-light recovery-button"
-												disabled={recoveryPending}
+												disabled={
+													recoveryPending ||
+													saveBrief.isPending ||
+													isActionPending
+												}
 												onClick={() => void refreshSavedRevision()}
 											>
 												{recoveryPending
@@ -653,7 +678,9 @@ export default function ProjectOverview({ id }: { id: string }) {
 												readOnly ||
 												!isDirty ||
 												storedBriefLength > 10_000 ||
-												saveBrief.isPending
+												saveBrief.isPending ||
+												isActionPending ||
+												recoveryPending
 											}
 										>
 											{saveBrief.isPending ? "Saving brief…" : "Save brief"}
