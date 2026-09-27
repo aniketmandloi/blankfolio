@@ -1,25 +1,42 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Database, Transaction } from "@blankfolio/db";
 import {
+	type AcquisitionReason,
 	literatureSnapshot,
 	paper,
+	paperAlias,
 	researchJob,
 	type SourceOutcome,
 	type SourceRecord,
 	snapshotPaper,
 	sourceExecution,
+	sourceResponseCache,
+	sourceThrottle,
 	usageReservation,
 } from "@blankfolio/db/schema/literature";
+import { researchProject } from "@blankfolio/db/schema/projects";
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, lt, notInArray, sql } from "drizzle-orm";
 import { type JobWithMetadata, PgBoss } from "pg-boss";
 import {
 	type LiteratureSource,
+	laterStageReserve,
 	literatureSources,
+	maxChargeMicros,
+	maxRetryAfterSeconds,
+	recordAliases,
+	recordCap,
+	responseCacheRetentionSeconds,
+	type SourceCache,
 	type SourcePrices,
+	type SourceQuotas,
 	type SourceResult,
+	SourceUnavailableError,
+	sourceAllocation,
+	sourceAvailability,
 	TransientSourceError,
 	UncertainSourceOutcome,
+	usageMicros,
 } from "./literature-sources";
 import { pilotAccessStatus } from "./pilot-access";
 import { requireProject } from "./project-lifecycle";
@@ -30,13 +47,13 @@ import {
 } from "./research-jobs";
 import { holdUsage, reserveUsage, settleUsage } from "./usage-budget";
 
-export const recordCap = 200;
 export const maxSourceAttempts = 3;
 const finished: SourceOutcome[] = ["succeeded", "empty", "partial", "failed"];
 
 export type LiteratureWorkerOptions = {
 	db: Database;
 	prices: SourcePrices;
+	quotas?: SourceQuotas;
 	sources?: Record<string, LiteratureSource>;
 	now?: () => Date;
 	sleep?: (milliseconds: number) => Promise<void>;
@@ -95,6 +112,7 @@ async function lockActiveJob(tx: Transaction, jobId: string) {
 export function createLiteratureWorker({
 	db,
 	prices,
+	quotas = {},
 	sources = literatureSources,
 	now = () => new Date(),
 	sleep = (milliseconds) =>
@@ -107,15 +125,16 @@ export function createLiteratureWorker({
 			if (!job) return null;
 			if (job.state === "queued") {
 				const { scope } = job.input;
-				const allocation = Math.floor(recordCap / scope.sources.length);
+				const allocation = sourceAllocation(scope.sources.length);
 				await tx
 					.insert(sourceExecution)
 					.values(
 						scope.sources.map((id) => {
-							const filters = sources[id]?.filters(scope) ?? {
-								applied: [],
-								unsupported: [],
-							};
+							const source = sources[id];
+							const filters = source?.filters(
+								scope,
+								sourceAvailability(source, { prices, quotas }).routes,
+							) ?? { applied: [], unsupported: [] };
 							return {
 								id: randomUUID(),
 								jobId,
@@ -150,16 +169,100 @@ export function createLiteratureWorker({
 			.where(eq(sourceExecution.id, execution.id));
 	}
 
+	/** Provider pauses are shared through the database so every worker observes them. */
+	async function pausedFor(sourceId: string) {
+		const [throttle] = await db
+			.select({ pausedUntil: sourceThrottle.pausedUntil })
+			.from(sourceThrottle)
+			.where(eq(sourceThrottle.source, sourceId));
+		return Math.max(
+			0,
+			(throttle?.pausedUntil.getTime() ?? 0) - now().getTime(),
+		);
+	}
+	async function pause(sourceId: string, seconds: number) {
+		const pausedUntil = new Date(now().getTime() + seconds * 1000);
+		await db
+			.insert(sourceThrottle)
+			.values({ source: sourceId, pausedUntil })
+			.onConflictDoUpdate({
+				target: sourceThrottle.source,
+				set: {
+					pausedUntil: sql`greatest(${sourceThrottle.pausedUntil}, excluded.paused_until)`,
+				},
+			});
+	}
+
+	function responseCache(projectId: string, sourceId: string): SourceCache {
+		const keyOf = (key: string) =>
+			createHash("sha256").update(`${sourceId}\n${key}`).digest("hex");
+		return {
+			async get(key) {
+				const [hit] = await db
+					.select({
+						body: sourceResponseCache.body,
+						fetchedAt: sourceResponseCache.fetchedAt,
+					})
+					.from(sourceResponseCache)
+					.where(
+						and(
+							eq(sourceResponseCache.projectId, projectId),
+							eq(sourceResponseCache.key, keyOf(key)),
+						),
+					);
+				return hit ?? null;
+			},
+			async set(key, body) {
+				const fetchedAt = now();
+				await db.transaction(async (tx) => {
+					// Waits for a concurrent deletion, whose cleanup would otherwise miss this row.
+					const [project] = await tx
+						.select({ state: researchProject.state })
+						.from(researchProject)
+						.where(eq(researchProject.id, projectId))
+						.for("share");
+					if (!project || project.state === "deleting") return;
+					await tx
+						.insert(sourceResponseCache)
+						.values({
+							projectId,
+							key: keyOf(key),
+							source: sourceId,
+							body,
+							fetchedAt,
+						})
+						.onConflictDoUpdate({
+							target: [sourceResponseCache.projectId, sourceResponseCache.key],
+							set: { body, fetchedAt },
+						});
+					await tx
+						.delete(sourceResponseCache)
+						.where(
+							and(
+								eq(sourceResponseCache.projectId, projectId),
+								lt(
+									sourceResponseCache.fetchedAt,
+									new Date(
+										fetchedAt.getTime() - responseCacheRetentionSeconds * 1000,
+									),
+								),
+							),
+						);
+				});
+			},
+		};
+	}
+
 	async function retrieve(
 		job: Job,
 		execution: Execution,
 	): Promise<SourceResult | Failure | null> {
 		const source = sources[execution.source];
 		if (!source) return { outcome: "failed", errorClass: "source-disabled" };
-		const price = prices[source.id];
-		if (source.metered && execution.status === "running") {
+		const metered = source.routes.length > 0;
+		if (metered && execution.status === "running") {
 			// A metered attempt was in flight when a worker stopped; it may have been billed.
-			const [inFlight] = await db
+			const inFlight = await db
 				.select({ id: usageReservation.id })
 				.from(usageReservation)
 				.where(
@@ -168,9 +271,14 @@ export function createLiteratureWorker({
 						eq(usageReservation.attempt, execution.attempts),
 					),
 				);
-			if (inFlight) await holdUsage(db, inFlight.id);
+			for (const reservation of inFlight) await holdUsage(db, reservation.id);
 			return { outcome: "failed", errorClass: "uncertain-outcome" };
 		}
+		const { blockedBy, routes } = sourceAvailability(source, {
+			prices,
+			quotas,
+		});
+		if (blockedBy) return { outcome: "failed", errorClass: blockedBy };
 		const { scope } = job.input;
 		for (
 			let attempt = execution.attempts + 1;
@@ -178,35 +286,49 @@ export function createLiteratureWorker({
 			attempt++
 		) {
 			if (!(await claim(job.id))) return null;
+			const paused = await pausedFor(source.id);
+			if (paused > maxRetryAfterSeconds * 1000)
+				return { outcome: "failed", errorClass: "rate-limited" };
+			if (paused) await sleep(paused);
+			const request = {
+				queries: execution.effectiveQueries,
+				dateFrom: scope.dateFrom,
+				dateTo: scope.dateTo,
+				includeFoundations: scope.includeFoundations,
+				limit: execution.allocation,
+				attempt,
+				finalAttempt: attempt === maxSourceAttempts,
+				routes,
+				cache: responseCache(job.projectId, source.id),
+			};
 			let reservation: string | undefined;
-			if (source.metered) {
-				if (price === undefined)
-					return { outcome: "failed", errorClass: "pricing-unknown" };
+			if (metered) {
 				const reserved = await reserveUsage(db, {
 					projectId: job.projectId,
 					jobId: job.id,
 					sourceExecutionId: execution.id,
 					attempt,
 					route: source.id,
-					amountMicros: price * scope.queries.length,
+					amountMicros: maxChargeMicros(source, request, prices),
 					now: now(),
+					dailyQuotaMicros: quotas[source.id],
 				});
 				if (!reserved.reserved)
-					return { outcome: "failed", errorClass: "budget-exceeded" };
+					return {
+						outcome: "failed",
+						errorClass:
+							reserved.exceeded === "providerDay"
+								? "quota-exhausted"
+								: "budget-exceeded",
+					};
 				reservation = reserved.id;
 			}
 			await startAttempt(execution, attempt);
 			try {
-				const result = await source.search({
-					queries: execution.effectiveQueries,
-					dateFrom: scope.dateFrom,
-					dateTo: scope.dateTo,
-					includeFoundations: scope.includeFoundations,
-					limit: execution.allocation,
-					attempt,
-				});
-				if (reservation && price !== undefined)
-					await settleUsage(db, reservation, price * result.requests);
+				const result = await source.search(request);
+				if (reservation)
+					await settleUsage(db, reservation, usageMicros(result.usage, prices));
+				if (result.pauseSeconds) await pause(source.id, result.pauseSeconds);
 				return result;
 			} catch (error) {
 				if (error instanceof UncertainSourceOutcome) {
@@ -214,8 +336,15 @@ export function createLiteratureWorker({
 						await holdUsage(db, reservation);
 						return { outcome: "failed", errorClass: "uncertain-outcome" };
 					}
+				} else if (error instanceof SourceUnavailableError) {
+					if (reservation) await settleUsage(db, reservation, 0);
+					return { outcome: "failed", errorClass: error.errorClass };
 				} else if (error instanceof TransientSourceError) {
 					if (reservation) await settleUsage(db, reservation, 0);
+					if (error.retryAfterSeconds > maxRetryAfterSeconds) {
+						await pause(source.id, error.retryAfterSeconds);
+						return { outcome: "failed", errorClass: "rate-limited" };
+					}
 				} else throw error;
 				if (attempt < maxSourceAttempts)
 					await sleep(
@@ -292,36 +421,107 @@ export function createLiteratureWorker({
 				return;
 			}
 			const order = job.input.scope.sources;
-			const found = new Map<string, SourceRecord & { source: string }>();
-			for (const execution of executions.sort(
+			executions.sort(
 				(a, b) => order.indexOf(a.source) - order.indexOf(b.source),
-			))
-				for (const record of execution.records ?? [])
-					if (!found.has(record.key) && found.size < recordCap)
-						found.set(record.key, { ...record, source: execution.source });
-			const records = [...found.values()];
-			if (records.length)
+			);
+			// Records are the same paper only when they share an exact identifier; titles never merge.
+			type Kept = { record: SourceRecord; source: string; aliases: string[] };
+			const kept: Kept[] = [];
+			const byAlias = new Map<string, Kept>();
+			for (const execution of executions)
+				for (const record of execution.records ?? []) {
+					const aliases = recordAliases(record);
+					const same = aliases
+						.map((alias) => byAlias.get(alias))
+						.find((entry) => entry !== undefined);
+					if (same) {
+						for (const alias of aliases)
+							if (!byAlias.has(alias)) {
+								byAlias.set(alias, same);
+								same.aliases.push(alias);
+							}
+						continue;
+					}
+					if (kept.length >= recordCap) continue;
+					const entry = { record, source: execution.source, aliases };
+					kept.push(entry);
+					for (const alias of aliases) byAlias.set(alias, entry);
+				}
+			const owners = kept.length
+				? new Map(
+						(
+							await tx
+								.select()
+								.from(paperAlias)
+								.where(
+									inArray(
+										paperAlias.alias,
+										kept.flatMap((entry) => entry.aliases),
+									),
+								)
+						).map((row) => [row.alias, row.paperId]),
+					)
+				: new Map<string, string>();
+			const paperIds = new Map<Kept, string>();
+			const fresh: Kept[] = [];
+			for (const entry of kept) {
+				const owner = entry.aliases
+					.map((alias) => owners.get(alias))
+					.find((id) => id !== undefined);
+				if (owner) paperIds.set(entry, owner);
+				else fresh.push(entry);
+			}
+			if (fresh.length) {
 				await tx
 					.insert(paper)
 					.values(
-						records.map(({ source: _, acquisitionReason: __, ...record }) => ({
-							...record,
+						fresh.map(({ record }) => ({
 							id: randomUUID(),
+							key: record.key,
+							title: record.title,
+							authors: record.authors,
+							year: record.year,
+							doi: record.doi,
+							url: record.url,
 						})),
 					)
 					.onConflictDoNothing({ target: paper.key });
-			const papers = records.length
-				? await tx
-						.select({ id: paper.id, key: paper.key })
-						.from(paper)
-						.where(
-							inArray(
-								paper.key,
-								records.map((record) => record.key),
-							),
-						)
-				: [];
-			const paperIds = new Map(papers.map((row) => [row.key, row.id]));
+				const created = new Map(
+					(
+						await tx
+							.select({ id: paper.id, key: paper.key })
+							.from(paper)
+							.where(
+								inArray(
+									paper.key,
+									fresh.map(({ record }) => record.key),
+								),
+							)
+					).map((row) => [row.key, row.id]),
+				);
+				for (const entry of fresh)
+					paperIds.set(entry, created.get(entry.record.key) ?? "");
+			}
+			if (kept.length)
+				await tx
+					.insert(paperAlias)
+					.values(
+						kept.flatMap((entry) =>
+							entry.aliases.map((alias) => ({
+								alias,
+								paperId: paperIds.get(entry) ?? "",
+							})),
+						),
+					)
+					.onConflictDoNothing();
+			// Two records can resolve to one earlier paper through different identifiers.
+			const seen = new Set<string>();
+			const members = kept.filter((entry) => {
+				const id = paperIds.get(entry) ?? "";
+				if (seen.has(id)) return false;
+				seen.add(id);
+				return true;
+			});
 			const snapshotId = randomUUID();
 			await tx.insert(literatureSnapshot).values({
 				id: snapshotId,
@@ -338,17 +538,33 @@ export function createLiteratureWorker({
 						? "all-sources"
 						: "partial",
 				recordCap,
-				paperCount: records.length,
+				paperCount: members.length,
+				allocations: {
+					reserved: laterStageReserve,
+					sources: executions.map((execution) => {
+						const counts: Partial<Record<AcquisitionReason, number>> = {};
+						for (const { record, source } of members)
+							if (source === execution.source)
+								counts[record.acquisitionReason] =
+									(counts[record.acquisitionReason] ?? 0) + 1;
+						return {
+							source: execution.source,
+							allocation: execution.allocation,
+							kept: counts,
+						};
+					}),
+				},
 			});
-			if (records.length)
+			if (members.length)
 				await tx.insert(snapshotPaper).values(
-					records.map((record, rank) => ({
+					members.map((entry, rank) => ({
 						snapshotId,
-						paperId: paperIds.get(record.key) ?? "",
+						paperId: paperIds.get(entry) ?? "",
 						projectId: job.projectId,
-						source: record.source,
+						source: entry.source,
 						rank,
-						acquisitionReason: record.acquisitionReason,
+						acquisitionReason: entry.record.acquisitionReason,
+						observation: entry.record,
 					})),
 				);
 			await tx

@@ -16,7 +16,13 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { researchProcedure, router } from "../index";
-import { literatureSources, type SourcePrices } from "../literature-sources";
+import {
+	literatureSources,
+	maxChargeMicros,
+	type SourceSettings,
+	sourceAllocation,
+	sourceAvailability,
+} from "../literature-sources";
 import { requireProject } from "../project-lifecycle";
 import { activeRunsPerAccount } from "../research-jobs";
 import { budgetStatus } from "../usage-budget";
@@ -74,15 +80,23 @@ export function proposeScope(brief: ResearchBrief, now: Date): LiteratureScope {
 	};
 }
 
-function sourceCatalog(prices: SourcePrices) {
+function sourceCatalog(settings: SourceSettings) {
 	return Object.values(literatureSources).map((source) => ({
 		id: source.id,
 		label: source.label,
-		metered: source.metered,
-		priceMicrosPerQuery: prices[source.id] ?? null,
-		priced: !source.metered || prices[source.id] !== undefined,
+		metered: source.routes.length > 0,
+		routes: source.routes.map((route) => ({
+			id: route,
+			priceMicros: settings.prices[route] ?? null,
+		})),
+		dailyQuotaMicros: settings.quotas[source.id] ?? null,
+		unavailable: sourceAvailability(source, settings).blockedBy,
 	}));
 }
+const unavailableText = {
+	"pricing-unknown": "its pricing is not configured",
+	"quota-unknown": "its daily quota is not configured",
+};
 
 async function latestScope(db: Database | Transaction, projectId: string) {
 	const [saved] = await db
@@ -110,7 +124,7 @@ async function latestBrief(db: Database | Transaction, projectId: string) {
 async function scopeView(
 	db: Database | Transaction,
 	projectId: string,
-	prices: SourcePrices,
+	settings: SourceSettings,
 ) {
 	const saved = await latestScope(db, projectId);
 	const brief = await latestBrief(db, projectId);
@@ -119,7 +133,7 @@ async function scopeView(
 		briefRevision: saved?.briefRevision ?? brief.revision,
 		proposed: !saved,
 		scope: saved?.scope ?? proposeScope(brief.brief, new Date()),
-		sources: sourceCatalog(prices),
+		sources: sourceCatalog(settings),
 	};
 }
 
@@ -192,7 +206,7 @@ export const literatureRouter = router({
 	scope: researchProcedure.input(projectRef).query(({ ctx, input }) =>
 		ctx.db.transaction(async (tx) => {
 			await requireProject(tx, ctx.session.user.id, input.projectId);
-			return scopeView(tx, input.projectId, ctx.sourcePrices);
+			return scopeView(tx, input.projectId, ctx.sourceSettings);
 		}, readOnly),
 	),
 	saveScope: researchProcedure
@@ -225,7 +239,7 @@ export const literatureRouter = router({
 					briefRevision: project.revision,
 					scope: input.scope,
 				});
-				return scopeView(tx, input.projectId, ctx.sourcePrices);
+				return scopeView(tx, input.projectId, ctx.sourceSettings);
 			}),
 		),
 	submitSearch: researchProcedure
@@ -287,14 +301,27 @@ export const literatureRouter = router({
 				const budget = await budgetStatus(tx, input.projectId, new Date());
 				for (const id of saved.scope.sources) {
 					const source = literatureSources[id];
-					if (!source?.metered) continue;
-					const price = ctx.sourcePrices[id];
-					if (price === undefined)
+					if (!source) continue;
+					const { blockedBy, routes } = sourceAvailability(
+						source,
+						ctx.sourceSettings,
+					);
+					if (blockedBy)
 						throw new TRPCError({
 							code: "PRECONDITION_FAILED",
-							message: `${source.label} is disabled because its pricing is not configured. Remove it from the scope or use free sources.`,
+							message: `${source.label} is disabled because ${unavailableText[blockedBy]}. Remove it from the scope or use other sources.`,
 						});
-					if (budget.exceeds(price * saved.scope.queries.length))
+					const charge = maxChargeMicros(
+						source,
+						{
+							queries: saved.scope.queries,
+							limit: sourceAllocation(saved.scope.sources.length),
+							includeFoundations: saved.scope.includeFoundations,
+							routes,
+						},
+						ctx.sourceSettings.prices,
+					);
+					if (charge && budget.exceeds(charge))
 						throw new TRPCError({
 							code: "PRECONDITION_FAILED",
 							message: `The spending limit does not allow ${source.label} now. Remove it from the scope or use free sources.`,
@@ -481,14 +508,27 @@ export const literatureRouter = router({
 				period: budget.period,
 				limits: budget.limits,
 				projectCommittedMicros: budget.projectCommittedMicros,
-				sources: sourceCatalog(ctx.sourcePrices).map((source) => ({
-					...source,
-					blockedBy: !source.metered
-						? null
-						: source.priceMicrosPerQuery === null
-							? ("pricing-unknown" as const)
-							: budget.exceeds(source.priceMicrosPerQuery),
-				})),
+				sources: sourceCatalog(ctx.sourceSettings).map((entry) => {
+					const source = literatureSources[entry.id];
+					const charge = source
+						? maxChargeMicros(
+								source,
+								{
+									queries: ["one query"],
+									limit: sourceAllocation(1),
+									includeFoundations: true,
+									routes: sourceAvailability(source, ctx.sourceSettings).routes,
+								},
+								ctx.sourceSettings.prices,
+							)
+						: 0;
+					return {
+						...entry,
+						/** Whether a one-query search on this source alone is blocked now. */
+						blockedBy:
+							entry.unavailable ?? (charge ? budget.exceeds(charge) : null),
+					};
+				}),
 			};
 		}, readOnly),
 	),

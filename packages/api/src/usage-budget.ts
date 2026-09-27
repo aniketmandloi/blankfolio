@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Database, Transaction } from "@blankfolio/db";
 import { usageReservation } from "@blankfolio/db/schema/literature";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 
 /** Pilot policy in micro-dollars, not a price estimate; changing it is a reviewed code change. */
 export const budgetLimits = {
@@ -53,9 +53,26 @@ function exceededLimit(
 	return null;
 }
 
+/** The route's committed spend since the start of the UTC day, across the deployment. */
+async function committedToday(tx: Transaction, route: string, now: Date) {
+	const dayStart = new Date(`${now.toISOString().slice(0, 10)}T00:00:00Z`);
+	const [total] = await tx
+		.select({ micros: committed() })
+		.from(usageReservation)
+		.where(
+			and(
+				eq(usageReservation.period, usagePeriod(now)),
+				eq(usageReservation.route, route),
+				gte(usageReservation.createdAt, dayStart),
+			),
+		);
+	return total?.micros ?? 0;
+}
+
 /**
- * Reserves a conservative maximum charge against run, project-month and global-month limits.
- * Serialised by an advisory lock so concurrent reservations, pending or held, cannot overspend.
+ * Reserves a conservative maximum charge against run, project-month and global-month limits,
+ * and optionally the route's daily provider quota. Serialised by an advisory lock so concurrent
+ * reservations, pending or held, cannot overspend.
  */
 export async function reserveUsage(
 	db: Database,
@@ -67,6 +84,7 @@ export async function reserveUsage(
 		route: string;
 		amountMicros: number;
 		now: Date;
+		dailyQuotaMicros?: number;
 	},
 ) {
 	return db.transaction(async (tx) => {
@@ -74,10 +92,17 @@ export async function reserveUsage(
 			sql`select pg_advisory_xact_lock(hashtext('usage_reservation'))`,
 		);
 		const period = usagePeriod(request.now);
-		const exceeded = exceededLimit(
-			await committedTotals(tx, period, request.projectId, request.jobId),
-			request.amountMicros,
-		);
+		const exceeded: BudgetLimit | "providerDay" | null =
+			exceededLimit(
+				await committedTotals(tx, period, request.projectId, request.jobId),
+				request.amountMicros,
+			) ??
+			(request.dailyQuotaMicros !== undefined &&
+			(await committedToday(tx, request.route, request.now)) +
+				request.amountMicros >
+				request.dailyQuotaMicros
+				? "providerDay"
+				: null);
 		if (exceeded) return { reserved: false as const, exceeded };
 		const id = randomUUID();
 		await tx.insert(usageReservation).values({

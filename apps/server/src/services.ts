@@ -1,4 +1,7 @@
-import { parseSourcePrices } from "@blankfolio/api/literature-sources";
+import {
+	parseSourcePrices,
+	parseSourceQuotas,
+} from "@blankfolio/api/literature-sources";
 import { createDatabaseJobQueue } from "@blankfolio/api/research-jobs";
 import { createAuth } from "@blankfolio/auth";
 import { createDb } from "@blankfolio/db";
@@ -9,4 +12,7 @@ import { createMailDelivery } from "./mail";
 export const db = createDb(ENV);
 export const auth = createAuth(ENV, db, createMailDelivery(ENV));
 export const jobQueue = createDatabaseJobQueue(db);
-export const sourcePrices = parseSourcePrices(ENV.LITERATURE_SOURCE_PRICES);
+export const sourceSettings = {
+	prices: parseSourcePrices(ENV.LITERATURE_SOURCE_PRICES),
+	quotas: parseSourceQuotas(ENV.LITERATURE_SOURCE_QUOTAS),
+};

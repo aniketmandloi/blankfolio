@@ -17,6 +17,7 @@ type ScopeView = Outputs["scope"];
 type Scope = ScopeView["scope"];
 type Job = Outputs["jobs"]["items"][number];
 type SourceOutcome = Outputs["snapshot"]["sources"][number];
+type CatalogSource = ScopeView["sources"][number];
 
 const activeStates: Job["state"][] = ["queued", "running"];
 const pollMilliseconds = 5_000;
@@ -58,6 +59,35 @@ const outcomeText: Record<SourceOutcome["status"], string> = {
 
 function dollars(micros: number) {
 	return `$${(micros / 1e6).toFixed(2)}`;
+}
+/** Per-request prices can be fractions of a cent. */
+function price(micros: number) {
+	return `$${(micros / 1e6).toLocaleString("en", {
+		minimumFractionDigits: 2,
+		maximumFractionDigits: 6,
+	})}`;
+}
+const routeText: Record<string, string> = {
+	"fixture-metered": "per query",
+	"openalex-search": "per search page",
+	"openalex-filter": "per citation or identifier lookup",
+};
+const unavailableText: Record<
+	NonNullable<CatalogSource["unavailable"]>,
+	string
+> = {
+	"pricing-unknown": "Disabled: pricing is not configured.",
+	"quota-unknown": "Disabled: the daily provider quota is not configured.",
+};
+function sourceCost(source: CatalogSource, blocked: boolean) {
+	if (!source.metered) return " Free.";
+	if (source.unavailable) return ` ${unavailableText[source.unavailable]}`;
+	const prices = source.routes.map((route) =>
+		route.priceMicros === null
+			? `${routeText[route.id] ?? route.id} not priced, so that step is skipped`
+			: `${price(route.priceMicros)} ${routeText[route.id] ?? route.id}`,
+	);
+	return ` ${prices.join("; ")}, reserved before each attempt.${blocked ? " A spending limit currently blocks it." : ""}`;
 }
 function formatDate(value: Date | string) {
 	return new Intl.DateTimeFormat("en", {
@@ -477,11 +507,7 @@ export default function LiteratureWorkspace({ id }: { id: string }) {
 													<span>
 														{source.label}
 														<span className="field-caption">
-															{!source.metered
-																? " Free."
-																: source.priceMicrosPerQuery === null
-																	? " Disabled: pricing is not configured."
-																	: ` ${dollars(source.priceMicrosPerQuery)} per query, reserved before each attempt.${blockedBy ? " A spending limit currently blocks it." : ""}`}
+															{sourceCost(source, Boolean(blockedBy))}
 														</span>
 													</span>
 												</label>
@@ -779,8 +805,8 @@ export default function LiteratureWorkspace({ id }: { id: string }) {
 											<div key={source.id}>
 												<dt>{source.label}</dt>
 												<dd>
-													{source.blockedBy === "pricing-unknown"
-														? "Disabled: pricing is not configured"
+													{source.unavailable
+														? unavailableText[source.unavailable]
 														: source.blockedBy
 															? "Blocked by a spending limit"
 															: "Available"}

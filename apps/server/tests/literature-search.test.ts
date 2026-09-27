@@ -164,7 +164,7 @@ scenario(
 				source: "fixture-catalog",
 				status: "succeeded",
 				attempts: 1,
-				allocation: 100,
+				allocation: 80,
 				effectiveQueries: [
 					"tabular transfer learning",
 					"hospital domain shift",
@@ -311,9 +311,9 @@ scenario(
 					"older foundational work",
 				],
 				reportedCount: 1006,
-				receivedCount: 100,
+				receivedCount: 80,
 				truncated: true,
-				cursor: "offset:100",
+				cursor: "offset:80",
 				cacheAgeSeconds: 21_600,
 			}),
 			expect.objectContaining({
@@ -322,7 +322,7 @@ scenario(
 				errorClass: "query-failed",
 				unsupportedFilters: ["older foundational work"],
 				reportedCount: 500,
-				receivedCount: 100,
+				receivedCount: 80,
 				truncated: true,
 			}),
 		]);
@@ -868,7 +868,11 @@ scenario(
 	"unknown pricing disables only metered sources while free searches and the budget status stay available",
 	async (workspace) => {
 		const cookie = await workspace.signIn("unpriced");
-		const unpriced = client(workspace, cookie, workspace.createAuthApp({}, {}));
+		const unpriced = client(
+			workspace,
+			cookie,
+			workspace.createAuthApp({}, { prices: {}, quotas: {} }),
+		);
 		const projectId = await readyProject(unpriced, "Unpriced sources");
 		const budget = await unpriced.literature.budget.query({ projectId });
 		expect(budget.sources.map((s) => [s.id, s.blockedBy])).toEqual([
