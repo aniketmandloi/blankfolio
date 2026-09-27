@@ -51,16 +51,18 @@ async function latestLink(email: string, kind: string) {
 async function signIn(page: Page, email: string, secret = password) {
 	await page.getByLabel("Email").fill(email);
 	await page.getByLabel("Password").fill(secret);
-	await page.getByRole("button", { name: "Sign In", exact: true }).click();
+	await page.getByRole("button", { name: "Sign in", exact: true }).click();
 }
 
 async function registerAndVerify(page: Page, email: string) {
 	await page.goto("/login");
-	await page.getByRole("button", { name: "Need an account? Sign Up" }).click();
+	await page.getByRole("button", { name: "Need an account? Sign up" }).click();
 	await page.getByLabel("Name").fill("Browser fixture");
 	await page.getByLabel("Email").fill(email);
 	await page.getByLabel("Password").fill(password);
-	await page.getByRole("button", { name: "Sign Up", exact: true }).click();
+	await page
+		.getByRole("button", { name: "Create account", exact: true })
+		.click();
 	await expect(
 		page.getByRole("heading", { name: "Check your inbox." }),
 	).toBeVisible();

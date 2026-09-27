@@ -8,7 +8,7 @@ import {
 	useMutation,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { Archive, ArrowUpRight, BookOpen, Plus, RotateCcw } from "lucide-react";
+import { Archive, Plus, RotateCcw } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -93,15 +93,11 @@ export default function Dashboard() {
 			<div className="folio-page projects-page">
 				<div className="page-heading">
 					<div>
-						<p className="eyebrow">Research desk · {session?.user.name}</p>
 						<h1 className="display-title">Projects</h1>
 						<p className="page-intro">
-							A quiet place to shape a question into a research plan.
+							Signed in as {session?.user.name}. Each project holds one research
+							brief and its revision history.
 						</p>
-					</div>
-					<div className="folio-index" aria-hidden="true">
-						<span>FIELD</span>
-						<span>NOTES</span>
 					</div>
 				</div>
 
@@ -109,17 +105,11 @@ export default function Dashboard() {
 					className="new-project-panel"
 					aria-labelledby="new-project-title"
 				>
-					<div className="new-project-copy">
-						<div className="section-mark" aria-hidden="true">
-							<Plus size={17} strokeWidth={1.7} />
-						</div>
-						<div>
-							<p className="eyebrow">Begin with a question</p>
-							<h2 id="new-project-title">Open a new research project</h2>
-							<p>
-								Give the investigation a working title. You can refine it later.
-							</p>
-						</div>
+					<div>
+						<h2 id="new-project-title">New project</h2>
+						<p className="muted-copy">
+							Start with a working title. You can change it later.
+						</p>
 					</div>
 					<form
 						className="create-project-form"
@@ -148,8 +138,8 @@ export default function Dashboard() {
 							className="folio-button folio-button-primary"
 							disabled={createProject.isPending}
 						>
-							{createProject.isPending ? "Opening…" : "Create project"}
-							<ArrowUpRight size={15} aria-hidden="true" />
+							<Plus size={15} aria-hidden="true" />
+							{createProject.isPending ? "Creating…" : "Create project"}
 						</Button>
 					</form>
 					{createProject.error && (
@@ -168,12 +158,9 @@ export default function Dashboard() {
 					aria-labelledby="project-shelf-title"
 				>
 					<div className="shelf-heading">
-						<div>
-							<p className="eyebrow">Your workspace</p>
-							<h2 id="project-shelf-title">
-								{state === "active" ? "Current projects" : "Archived projects"}
-							</h2>
-						</div>
+						<h2 id="project-shelf-title">
+							{state === "active" ? "Active projects" : "Archived projects"}
+						</h2>
 						<fieldset className="project-tabs">
 							<legend className="sr-only">Project status</legend>
 							<Button
@@ -200,7 +187,7 @@ export default function Dashboard() {
 									setActionError("");
 								}}
 							>
-								Archive
+								Archived
 							</Button>
 						</fieldset>
 					</div>
@@ -213,12 +200,11 @@ export default function Dashboard() {
 
 					{projectList.isPending ? (
 						<div className="empty-shelf" aria-live="polite">
-							<BookOpen size={19} strokeWidth={1.5} aria-hidden="true" />
-							<p>Gathering your project notes…</p>
+							<p>Loading projects…</p>
 						</div>
 					) : projectList.isError ? (
 						<div className="empty-shelf error-shelf" role="alert">
-							<p>These project notes could not be loaded.</p>
+							<p>Projects could not be loaded.</p>
 							<p className="muted-copy">{errorText(projectList.error)}</p>
 							<Button
 								type="button"
@@ -231,21 +217,16 @@ export default function Dashboard() {
 						</div>
 					) : projects.length === 0 ? (
 						<div className="empty-shelf">
-							<div className="empty-stamp" aria-hidden="true">
-								{state === "active" ? "01" : "—"}
-							</div>
-							<div>
-								<h3>
-									{state === "active"
-										? "Your desk is clear."
-										: "Nothing has been archived yet."}
-								</h3>
-								<p>
-									{state === "active"
-										? "Start with a title above, then sketch the scope of your question."
-										: "Archived projects stay here until you bring them back."}
-								</p>
-							</div>
+							<h3>
+								{state === "active"
+									? "No projects yet"
+									: "No archived projects"}
+							</h3>
+							<p>
+								{state === "active"
+									? "Create a project above to write its research brief."
+									: "Archived projects appear here until you restore them."}
+							</p>
 						</div>
 					) : (
 						<ul
@@ -253,18 +234,14 @@ export default function Dashboard() {
 							id="project-list"
 							aria-busy={isActionPending}
 						>
-							{projects.map((project, index) => (
+							{projects.map((project) => (
 								<li className="project-row" key={project.id}>
-									<div className="project-number" aria-hidden="true">
-										{String(index + 1).padStart(2, "0")}
-									</div>
 									<div className="project-row-main">
 										<Link
 											className="project-title-link"
 											href={`/projects/${project.id}`}
 										>
 											{project.title || "Untitled research project"}
-											<ArrowUpRight size={15} aria-hidden="true" />
 										</Link>
 										<p className="project-meta">
 											Revision {project.revision}{" "}
@@ -345,10 +322,6 @@ export default function Dashboard() {
 						</div>
 					)}
 				</section>
-				<footer className="page-footnote">
-					<span>Blankfolio research workspace</span>
-					<span>Keep the question, scope, and evidence in view.</span>
-				</footer>
 			</div>
 		</main>
 	);

@@ -11,7 +11,6 @@ import {
 	Archive,
 	ArrowLeft,
 	Check,
-	Clock3,
 	FileClock,
 	RotateCcw,
 	Trash2,
@@ -384,23 +383,17 @@ export default function ProjectOverview({ id }: { id: string }) {
 
 				<header className="detail-heading">
 					<div>
-						<p className="eyebrow">
-							{project.state === "archived"
-								? "Archived project"
-								: "Research project"}
-							<span aria-hidden="true"> · </span> Revision {project.revision}
-						</p>
 						<h1 className="display-title detail-title">
 							{briefFields.title || "Untitled research project"}
 						</h1>
 						<p className="page-intro">
-							A working brief for the question, scope, and conditions of this
-							investigation.
+							Revision {project.revision} · Last saved{" "}
+							{formatDate(project.updatedAt)}
 						</p>
 					</div>
 					<div className={`status-seal ${readOnly ? "status-seal-muted" : ""}`}>
 						<span className="seal-dot" aria-hidden="true" />
-						{readOnly ? "Archived" : "In progress"}
+						{readOnly ? "Archived" : "Active"}
 					</div>
 				</header>
 
@@ -408,12 +401,7 @@ export default function ProjectOverview({ id }: { id: string }) {
 					<div className="detail-primary-column">
 						<section className="brief-panel" aria-labelledby="brief-heading">
 							<div className="panel-heading">
-								<div>
-									<p className="eyebrow">
-										Project notebook · {project.id.slice(0, 8)}
-									</p>
-									<h2 id="brief-heading">Research brief</h2>
-								</div>
+								<h2 id="brief-heading">Research brief</h2>
 								<div className="revision-chip">
 									<FileClock size={14} aria-hidden="true" />
 									Revision {baseRevision ?? project.revision}
@@ -678,18 +666,7 @@ export default function ProjectOverview({ id }: { id: string }) {
 							className="history-panel"
 							aria-labelledby="history-heading"
 						>
-							<div className="panel-heading history-heading">
-								<div
-									className="section-mark section-mark-small"
-									aria-hidden="true"
-								>
-									<Clock3 size={15} strokeWidth={1.6} />
-								</div>
-								<div>
-									<p className="eyebrow">A record of changes</p>
-									<h2 id="history-heading">Revision history</h2>
-								</div>
-							</div>
+							<h2 id="history-heading">Revision history</h2>
 							{historyItems.length === 0 ? (
 								<p className="muted-copy">No saved revisions yet.</p>
 							) : (
@@ -737,10 +714,6 @@ export default function ProjectOverview({ id }: { id: string }) {
 							className={`next-step-card ${completeForDiscovery ? "is-ready" : ""}`}
 							aria-labelledby="next-step-heading"
 						>
-							<p className="eyebrow">Next action</p>
-							<div className="next-step-icon" aria-hidden="true">
-								{completeForDiscovery ? <Check size={18} /> : <span>1</span>}
-							</div>
 							<h2 id="next-step-heading">
 								{completeForDiscovery ? "Brief ready" : "Complete the brief"}
 							</h2>
@@ -769,8 +742,7 @@ export default function ProjectOverview({ id }: { id: string }) {
 							className="project-actions-panel"
 							aria-labelledby="project-actions-heading"
 						>
-							<p className="eyebrow">Project controls</p>
-							<h2 id="project-actions-heading">Keep your desk in order</h2>
+							<h2 id="project-actions-heading">Project</h2>
 							<p className="muted-copy">
 								{readOnly
 									? "Restoring makes this project editable again."
@@ -859,8 +831,7 @@ export default function ProjectOverview({ id }: { id: string }) {
 					</aside>
 				</div>
 				<footer className="page-footnote">
-					<span>Project created {formatDate(project.createdAt)}</span>
-					<span>Last saved {formatDate(project.updatedAt)}</span>
+					<span>Created {formatDate(project.createdAt)}</span>
 				</footer>
 			</div>
 		</main>
