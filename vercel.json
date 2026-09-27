@@ -12,16 +12,10 @@
 			"framework": "hono",
 			"entrypoint": "src/index.ts",
 			"installCommand": "cd ../.. && pnpm install",
-			"routes": [
+			"rewrites": [
 				{
-					"src": "/api/((?!auth(?:/|$)).*)",
-					"transforms": [
-						{
-							"type": "request.path",
-							"op": "set",
-							"args": "/$1"
-						}
-					]
+					"source": "/api/trpc/:path(.*)",
+					"destination": "/trpc/:path"
 				}
 			]
 		}
