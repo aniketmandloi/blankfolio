@@ -7,6 +7,8 @@ const deployedEnvSchema = z.object({
 	CORS_ORIGIN: z.url(),
 	DATABASE_URL: z.string().min(1),
 	AUTH_MAIL_OUTBOX: z.string().optional(),
+	RESEND_API_KEY: z.string().startsWith("re_").optional(),
+	AUTH_MAIL_FROM: z.string().min(3).optional(),
 });
 
 // Vercel functions ship without the Varlock CLI that auto-load executes, so
