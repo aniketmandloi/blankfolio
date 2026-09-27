@@ -5,4 +5,4 @@ import { ENV } from "./env.server";
 import { createMailDelivery } from "./mail";
 
 export const db = createDb(ENV);
-export const auth = createAuth(ENV, db, createMailDelivery());
+export const auth = createAuth(ENV, db, createMailDelivery(ENV));
