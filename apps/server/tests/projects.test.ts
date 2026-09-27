@@ -1,3 +1,4 @@
+import { retryProjectCleanup } from "@blankfolio/api/project-lifecycle";
 import type { AppRouter } from "@blankfolio/api/routers/index";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { afterAll, beforeAll, expect, test } from "vitest";
@@ -323,7 +324,7 @@ test("project and brief history pages do not omit or repeat saved records", asyn
 	).toEqual([4, 3, 2, 1]);
 });
 
-test("cleanup failure cannot reopen a deleted Research Project", async () => {
+test("cleanup failure cannot reopen a deleted Research Project and a retry removes its private brief", async () => {
 	const owner = client(await workspace.signIn("cleanup-failure"));
 	const project = await owner.projects.create.mutate({
 		title: "Private content being removed",
@@ -346,4 +347,13 @@ test("cleanup failure cannot reopen a deleted Research Project", async () => {
 			"DROP TRIGGER test_block_cleanup ON brief_revision; DROP FUNCTION test_block_cleanup()",
 		);
 	}
+	await retryProjectCleanup(workspace.db);
+	const remaining = await workspace.db.$client.query(
+		"SELECT count(*)::int AS briefs, (SELECT cleanup_completed_at IS NOT NULL FROM research_project WHERE id = $1) AS cleaned FROM brief_revision WHERE project_id = $1",
+		[project.id],
+	);
+	expect(remaining.rows[0]).toEqual({ briefs: 0, cleaned: true });
+	await expect(
+		owner.projects.get.query({ id: project.id }),
+	).rejects.toMatchObject({ data: { code: "NOT_FOUND" } });
 });
