@@ -1,6 +1,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import PilotAccessGate from "@/components/pilot-access-gate";
 import { authClient } from "@/lib/auth-client";
 
 import Dashboard from "./dashboard";
@@ -17,5 +18,9 @@ export default async function DashboardPage() {
 		redirect("/login");
 	}
 
-	return <Dashboard />;
+	return (
+		<PilotAccessGate>
+			<Dashboard />
+		</PilotAccessGate>
+	);
 }

@@ -14,6 +14,17 @@ import Link from "next/link";
 import { authClient } from "@/lib/auth-client";
 import { queryClient } from "@/utils/trpc";
 
+export function signOut() {
+	authClient.signOut({
+		fetchOptions: {
+			onSuccess: () => {
+				queryClient.clear();
+				window.location.replace("/login");
+			},
+		},
+	});
+}
+
 export default function UserMenu() {
 	const { data: session, isPending } = authClient.useSession();
 
@@ -39,19 +50,7 @@ export default function UserMenu() {
 					<DropdownMenuLabel>My Account</DropdownMenuLabel>
 					<DropdownMenuSeparator />
 					<DropdownMenuItem>{session.user.email}</DropdownMenuItem>
-					<DropdownMenuItem
-						variant="destructive"
-						onClick={() => {
-							authClient.signOut({
-								fetchOptions: {
-									onSuccess: () => {
-										queryClient.clear();
-										window.location.replace("/login");
-									},
-								},
-							});
-						}}
-					>
+					<DropdownMenuItem variant="destructive" onClick={signOut}>
 						Sign Out
 					</DropdownMenuItem>
 				</DropdownMenuGroup>
