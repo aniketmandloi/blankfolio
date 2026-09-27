@@ -157,8 +157,7 @@ export default function ProjectOverview({ id }: { id: string }) {
 		unarchiveProject.isPending ||
 		deleteProject.isPending;
 	const storedBriefLength = draft
-		? draft.evaluationTrack.length +
-			draft.title.length +
+		? draft.title.length +
 			draft.topic.length +
 			[
 				draft.experienceLevel,
