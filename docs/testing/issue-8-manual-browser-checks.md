@@ -15,7 +15,7 @@ Repeat the journeys at **1280px** and **360px**, in Chrome and Safari (Safari re
 
 ## Checks
 
-1. **Sign-up waits for verification.** Invite A, then sign up as A on `/login` (Sign Up). The page should show *Check your inbox.* and stay on `/login`; it must not open the dashboard. Visiting `/dashboard` should return to `/login`.
+1. **Sign-up waits for verification.** Invite A, then sign up as A on `/login` (*Need an account? Sign up*). The page should show *Check your inbox.* and stay on `/login`; it must not open the dashboard. Visiting `/dashboard` should return to `/login`.
 2. **Unverified sign-in.** Choose *Back to sign in* and sign in as A. *Verify your email first.* should appear. *Send a new verification link* should show the neutral "If this address still needs verification…" status and add a new outbox line.
 3. **Verification.** Open A's newest verification link. `/email-verified` should say *Your address is confirmed.* without signing you in. Sign in: the Projects desk opens. Create a project, reload, sign out, sign back in and reopen it by URL.
 4. **Expired and reused links.** Open an older verification link after the one-hour expiry (or edit the token): *This link has expired.* / *This link cannot be used.* with a working request form. Opening an already-used recovery link should show *This recovery link cannot be used.*
