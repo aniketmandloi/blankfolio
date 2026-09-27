@@ -101,6 +101,7 @@ test("another account cannot enumerate, read, change, unarchive, or delete a Res
 				expectedRevision: 1,
 				brief: project.brief,
 			}),
+			stranger.projects.history.query({ id: project.id }),
 			stranger.projects.archive.mutate({ id: project.id }),
 			stranger.projects.unarchive.mutate({ id: project.id }),
 			stranger.projects.delete.mutate({ id: project.id }),
@@ -110,6 +111,13 @@ test("another account cannot enumerate, read, change, unarchive, or delete a Res
 	);
 	expect((await owner.projects.get.query({ id: project.id })).state).toBe(
 		"active",
+	);
+	await owner.projects.archive.mutate({ id: project.id });
+	await expect(
+		stranger.projects.unarchive.mutate({ id: project.id }),
+	).rejects.toMatchObject({ data: { code: "NOT_FOUND" } });
+	expect((await owner.projects.get.query({ id: project.id })).state).toBe(
+		"archived",
 	);
 });
 
@@ -250,7 +258,7 @@ test("concurrent tabs can publish only one next brief revision", async () => {
 	expect((await owner.projects.get.query({ id: project.id })).revision).toBe(2);
 });
 
-test("expired or absent sessions cannot access research operations", async () => {
+test("invalid or absent sessions cannot access research operations", async () => {
 	await expect(client("").projects.list.query({})).rejects.toMatchObject({
 		data: { code: "UNAUTHORIZED" },
 	});
