@@ -636,10 +636,6 @@ body {
 	margin: 0.85rem 0 0;
 }
 
-.list-limit-note {
-	margin-top: 0.8rem;
-}
-
 .load-more-row {
 	display: flex;
 	justify-content: center;
@@ -1138,13 +1134,6 @@ body {
 	padding: 0.75rem;
 	border: 1px solid var(--folio-rule);
 	background: color-mix(in srgb, var(--folio-paper) 75%, transparent);
-}
-
-.recovery-note {
-	margin: 0.55rem 0 0;
-	color: var(--folio-soft-ink);
-	font-size: 0.67rem;
-	line-height: 1.5;
 }
 
 .folio-page :focus-visible {

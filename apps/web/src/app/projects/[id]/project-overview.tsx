@@ -19,6 +19,10 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import {
+	announceUnsavedBrief,
+	confirmLeavingUnsavedBrief,
+} from "@/lib/unsaved-brief";
 import { trpc } from "@/utils/trpc";
 
 type ProjectDetailData = inferRouterOutputs<AppRouter>["projects"]["get"];
@@ -157,8 +161,7 @@ export default function ProjectOverview({ id }: { id: string }) {
 		unarchiveProject.isPending ||
 		deleteProject.isPending;
 	const storedBriefLength = draft
-		? draft.evaluationTrack.length +
-			draft.title.length +
+		? draft.title.length +
 			draft.topic.length +
 			[
 				draft.experienceLevel,
@@ -177,21 +180,11 @@ export default function ProjectOverview({ id }: { id: string }) {
 			: saveBrief.error
 				? errorText(saveBrief.error)
 				: "";
-	const conflictDetected = /conflict|another tab|revision/i.test(saveError);
+	const conflictDetected = saveBrief.error?.data?.code === "CONFLICT";
 
 	useEffect(() => {
-		window.dispatchEvent(
-			new CustomEvent("blankfolio:unsaved-change", {
-				detail: { dirty: isDirty },
-			}),
-		);
-		return () => {
-			window.dispatchEvent(
-				new CustomEvent("blankfolio:unsaved-change", {
-					detail: { dirty: false },
-				}),
-			);
-		};
+		announceUnsavedBrief(isDirty);
+		return () => announceUnsavedBrief(false);
 	}, [isDirty]);
 
 	useEffect(() => {
@@ -384,16 +377,7 @@ export default function ProjectOverview({ id }: { id: string }) {
 				<Link
 					className="back-link"
 					href="/dashboard"
-					onClick={(event) => {
-						if (
-							isDirty &&
-							!window.confirm(
-								"Leave this project? Your unsaved brief edits will be lost.",
-							)
-						) {
-							event.preventDefault();
-						}
-					}}
+					onClick={(event) => confirmLeavingUnsavedBrief(event, isDirty)}
 				>
 					<ArrowLeft size={15} aria-hidden="true" /> Projects
 				</Link>

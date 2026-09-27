@@ -2,21 +2,18 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import {
+	confirmLeavingUnsavedBrief,
+	onUnsavedBriefChange,
+} from "@/lib/unsaved-brief";
+
 import { ModeToggle } from "./mode-toggle";
 import UserMenu from "./user-menu";
 
 export default function Header() {
 	const [hasUnsavedBrief, setHasUnsavedBrief] = useState(false);
 
-	useEffect(() => {
-		const onUnsavedChange = (event: Event) => {
-			const detail = (event as CustomEvent<{ dirty: boolean }>).detail;
-			setHasUnsavedBrief(Boolean(detail?.dirty));
-		};
-		window.addEventListener("blankfolio:unsaved-change", onUnsavedChange);
-		return () =>
-			window.removeEventListener("blankfolio:unsaved-change", onUnsavedChange);
-	}, []);
+	useEffect(() => onUnsavedBriefChange(setHasUnsavedBrief), []);
 
 	return (
 		<header className="site-header">
@@ -25,16 +22,9 @@ export default function Header() {
 					<Link
 						className="site-wordmark"
 						href="/dashboard"
-						onClick={(event) => {
-							if (
-								hasUnsavedBrief &&
-								!window.confirm(
-									"Leave this project? Your unsaved brief edits will be lost.",
-								)
-							) {
-								event.preventDefault();
-							}
-						}}
+						onClick={(event) =>
+							confirmLeavingUnsavedBrief(event, hasUnsavedBrief)
+						}
 					>
 						<span className="wordmark-mark" aria-hidden="true">
 							b.
@@ -46,16 +36,9 @@ export default function Header() {
 						<Link
 							className="site-nav-link"
 							href="/dashboard"
-							onClick={(event) => {
-								if (
-									hasUnsavedBrief &&
-									!window.confirm(
-										"Leave this project? Your unsaved brief edits will be lost.",
-									)
-								) {
-									event.preventDefault();
-								}
-							}}
+							onClick={(event) =>
+								confirmLeavingUnsavedBrief(event, hasUnsavedBrief)
+							}
 						>
 							Projects
 						</Link>

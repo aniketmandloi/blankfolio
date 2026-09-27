@@ -225,6 +225,20 @@ test("the persisted brief stays within input bounds after recording blank constr
 		}),
 	).rejects.toMatchObject({ data: { code: "BAD_REQUEST" } });
 	expect((await owner.projects.get.query({ id: project.id })).revision).toBe(1);
+	const atLimit = await owner.projects.saveBrief.mutate({
+		id: project.id,
+		expectedRevision: 1,
+		brief: {
+			evaluationTrack: "tabular-classification",
+			title: "",
+			topic: "",
+			experienceLevel: "x".repeat(2500),
+			timeAvailability: "x".repeat(2500),
+			computeDescription: "x".repeat(2500),
+			desiredContribution: "x".repeat(2500),
+		},
+	});
+	expect(atLimit.revision).toBe(2);
 });
 
 test("a PostgreSQL failure rolls back the entire project creation without an orphan", async () => {

@@ -26,7 +26,7 @@
 	},
 	"devDependencies": {
 		"@blankfolio/config": "workspace:*",
-		"@trpc/client": "^11.19.0",
+		"@trpc/client": "catalog:",
 		"@types/node": "catalog:",
 		"tsdown": "^0.23.0",
 		"tsx": "catalog:",

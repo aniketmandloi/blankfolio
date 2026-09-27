@@ -24,11 +24,9 @@ export const briefSchema = z
 		desiredContribution: constraintField,
 	})
 	.refine(
-		(brief) =>
-			Object.values(brief).reduce(
-				(length, field) => length + field.length,
-				0,
-			) <= 10_000,
+		({ evaluationTrack: _, ...text }) =>
+			Object.values(text).reduce((length, field) => length + field.length, 0) <=
+			10_000,
 		{ message: "Research brief must be 10,000 characters or fewer" },
 	);
 export function assertDiscoveryBrief(brief: z.infer<typeof briefSchema>) {
