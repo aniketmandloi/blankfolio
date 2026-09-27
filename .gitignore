@@ -56,3 +56,8 @@ coverage
 .cache
 tmp
 temp
+
+# Browser fixture sessions and reports
+apps/web/.auth/
+playwright-report/
+test-results/
