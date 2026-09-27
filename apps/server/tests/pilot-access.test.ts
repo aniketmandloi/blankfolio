@@ -5,7 +5,7 @@ import {
 } from "@blankfolio/api/pilot-access";
 import type { AppRouter } from "@blankfolio/api/routers/index";
 import { createTRPCClient, httpLink } from "@trpc/client";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { afterAll, beforeAll, expect, test, vi } from "vitest";
 import { createTestWorkspace } from "./workspace-fixture";
 
 let workspace: Awaited<ReturnType<typeof createTestWorkspace>>;
@@ -221,4 +221,103 @@ test("operators change eligibility for a normalized email with an actor, time an
 	expect(await researcher.account.access.query()).toEqual({
 		status: "revoked",
 	});
+});
+
+test("registration and recovery responses do not reveal whether an account exists", async () => {
+	const known = address("known");
+	await verifiedSession(known);
+	const pending = address("pending");
+	await workspace.signUp(pending);
+	const unknown = address("unknown");
+	const respond = async (path: string, email: string) => {
+		const response = await workspace.post(path, {
+			email,
+			redirectTo: "http://localhost/reset-password",
+			callbackURL: "http://localhost/email-verified",
+		});
+		return { status: response.status, body: await response.json() };
+	};
+	const sent = workspace.mail.length;
+	expect(await respond("/api/auth/request-password-reset", known)).toEqual(
+		await respond("/api/auth/request-password-reset", unknown),
+	);
+	expect(await respond("/api/auth/send-verification-email", pending)).toEqual(
+		await respond("/api/auth/send-verification-email", unknown),
+	);
+	expect(await respond("/api/auth/send-verification-email", known)).toEqual(
+		await respond("/api/auth/send-verification-email", unknown),
+	);
+	expect(
+		workspace.mail.slice(sent).map(({ kind, to }) => ({ kind, to })),
+	).toEqual([
+		{ kind: "password-reset", to: known },
+		{ kind: "verification", to: pending },
+	]);
+	const duplicate = await workspace.signUp(known);
+	expect(duplicate.status).toBe(200);
+	expect(duplicate.headers.get("set-cookie")).toBeNull();
+	expect(workspace.mail.slice(sent)).toHaveLength(2);
+});
+
+test("a researcher recovers access with a single-use reset link that ends earlier sessions", async () => {
+	const email = address("recovering");
+	await workspace.invite(email);
+	const earlier = await verifiedSession(email);
+	await workspace.post("/api/auth/request-password-reset", {
+		email,
+		redirectTo: "http://localhost/reset-password",
+	});
+	const link = await workspace.followLatestMail(email, "password-reset");
+	expect(link.status).toBe(302);
+	const landing = new URL(link.headers.get("location") ?? "");
+	expect(`${landing.origin}${landing.pathname}`).toBe(
+		"http://localhost/reset-password",
+	);
+	const token = landing.searchParams.get("token");
+	const reset = () =>
+		workspace.post("/api/auth/reset-password", {
+			token,
+			newPassword: "Recovered-disposable-Password-456!",
+		});
+	expect((await reset()).status).toBe(200);
+	await expect(earlier.account.access.query()).rejects.toMatchObject({
+		data: { code: "UNAUTHORIZED" },
+	});
+	expect((await workspace.signInWith(email)).status).toBe(401);
+	const recovered = client(
+		workspace.sessionCookie(
+			await workspace.signInWith(email, "Recovered-disposable-Password-456!"),
+		),
+	);
+	expect((await recovered.projects.list.query({})).items).toEqual([]);
+	expect(await (await reset()).json()).toMatchObject({
+		code: "INVALID_TOKEN",
+	});
+});
+
+test("expired verification and recovery links return to a state that can request a new link", async () => {
+	const email = address("expired");
+	await workspace.signUp(email);
+	await workspace.post("/api/auth/request-password-reset", {
+		email,
+		redirectTo: "http://localhost/reset-password",
+	});
+	vi.useFakeTimers({ toFake: ["Date"] });
+	try {
+		vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1000);
+		const verification = await workspace.followLatestMail(
+			email,
+			"verification",
+		);
+		expect(verification.headers.get("location")).toBe(
+			"http://localhost/email-verified?error=TOKEN_EXPIRED",
+		);
+		const recovery = await workspace.followLatestMail(email, "password-reset");
+		expect(recovery.headers.get("location")).toBe(
+			"http://localhost/reset-password?error=INVALID_TOKEN",
+		);
+	} finally {
+		vi.useRealTimers();
+	}
+	expect((await workspace.signInWith(email)).status).toBe(403);
 });
