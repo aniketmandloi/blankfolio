@@ -6,12 +6,12 @@ import * as SecureStore from "expo-secure-store";
 import { ENV } from "../src/env";
 
 export const authClient = createAuthClient({
-  baseURL: ENV.EXPO_PUBLIC_SERVER_URL,
-  plugins: [
-    expoClient({
-      scheme: Constants.expoConfig?.scheme as string,
-      storagePrefix: Constants.expoConfig?.scheme as string,
-      storage: SecureStore,
-    }),
-  ],
+	baseURL: ENV.EXPO_PUBLIC_SERVER_URL,
+	plugins: [
+		expoClient({
+			scheme: Constants.expoConfig?.scheme as string,
+			storagePrefix: Constants.expoConfig?.scheme as string,
+			storage: SecureStore,
+		}),
+	],
 });

@@ -1,22 +1,22 @@
 {
-  "name": "@blankfolio/api",
-  "type": "module",
-  "exports": {
-    ".": "./src/index.ts",
-    "./*": "./src/*.ts"
-  },
-  "scripts": {
-    "check-types": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@blankfolio/auth": "workspace:*",
-    "@blankfolio/db": "workspace:*",
-    "@trpc/client": "catalog:",
-    "@trpc/server": "catalog:",
-    "zod": "catalog:"
-  },
-  "devDependencies": {
-    "@blankfolio/config": "workspace:*",
-    "typescript": "^6.0.3"
-  }
+	"name": "@blankfolio/api",
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./*": "./src/*.ts"
+	},
+	"scripts": {
+		"check-types": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@blankfolio/auth": "workspace:*",
+		"@blankfolio/db": "workspace:*",
+		"@trpc/client": "catalog:",
+		"@trpc/server": "catalog:",
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@blankfolio/config": "workspace:*",
+		"typescript": "^6.0.3"
+	}
 }
