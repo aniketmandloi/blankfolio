@@ -1,4 +1,7 @@
-import type { ProjectCleanupRegistry } from "@blankfolio/api/project-lifecycle";
+import {
+	createProjectCleanupRegistry,
+	type ProjectCleanupRegistry,
+} from "@blankfolio/api/project-lifecycle";
 import { appRouter } from "@blankfolio/api/routers/index";
 import type { Session } from "@blankfolio/auth";
 import type { Database } from "@blankfolio/db";
@@ -20,6 +23,10 @@ export type ApplicationServices = {
 };
 /** Importable request application: no sockets, environment loading, or global services. */
 export function createApp(services: ApplicationServices) {
+	const requestServices = {
+		...services,
+		projectCleanup: services.projectCleanup ?? createProjectCleanupRegistry(),
+	};
 	const app = new Hono();
 	app.use(
 		"/*",
@@ -37,7 +44,8 @@ export function createApp(services: ApplicationServices) {
 		"/trpc/*",
 		trpcServer({
 			router: appRouter,
-			createContext: (_opts, context) => createContext({ context, services }),
+			createContext: (_opts, context) =>
+				createContext({ context, services: requestServices }),
 		}),
 	);
 	app.get("/", (c) => c.text("OK"));

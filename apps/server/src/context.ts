@@ -1,10 +1,9 @@
 import type { Context as ApiContext } from "@blankfolio/api/context";
-import { createProjectCleanupRegistry } from "@blankfolio/api/project-lifecycle";
 import type { Context as HonoContext } from "hono";
 import type { ApplicationServices } from "./app";
 export type CreateContextOptions = {
 	context: HonoContext;
-	services: ApplicationServices;
+	services: Required<ApplicationServices>;
 };
 export async function createContext({
 	context,
@@ -12,7 +11,7 @@ export async function createContext({
 }: CreateContextOptions): Promise<ApiContext> {
 	return {
 		db: services.db,
-		projectCleanup: services.projectCleanup ?? createProjectCleanupRegistry(),
+		projectCleanup: services.projectCleanup,
 		session: await services.auth.api.getSession({
 			headers: context.req.raw.headers,
 		}),
