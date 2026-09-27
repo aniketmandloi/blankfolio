@@ -5,11 +5,12 @@
 	"scripts": {
 		"build": "tsdown",
 		"check-types": "tsc --noEmit",
-		"compile": "bun build --compile --no-compile-autoload-dotenv --minify --sourcemap --bytecode ./src/index.ts --outfile server",
-		"dev": "tsx watch src/index.ts",
-		"start": "node dist/index.mjs",
+		"compile": "bun build --compile --no-compile-autoload-dotenv --minify --sourcemap --bytecode ./src/start.ts --outfile server",
+		"dev": "tsx watch src/start.ts",
+		"start": "node dist/start.mjs",
 		"env:generate": "varlock codegen",
-		"auth:generate": "varlock run -- pnpm dlx auth@latest generate --config src/services.ts --output ../../packages/db/src/schema/auth.ts --yes"
+		"auth:generate": "varlock run -- pnpm dlx auth@latest generate --config src/services.ts --output ../../packages/db/src/schema/auth.ts --yes",
+		"test": "vitest run"
 	},
 	"dependencies": {
 		"@blankfolio/api": "workspace:*",
@@ -25,9 +26,11 @@
 	},
 	"devDependencies": {
 		"@blankfolio/config": "workspace:*",
+		"@trpc/client": "^11.19.0",
 		"@types/node": "catalog:",
 		"tsdown": "^0.23.0",
 		"tsx": "catalog:",
-		"typescript": "^6.0.3"
+		"typescript": "^6.0.3",
+		"vitest": "^5.0.2"
 	}
 }

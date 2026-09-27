@@ -32,6 +32,7 @@
 	},
 	"devDependencies": {
 		"@blankfolio/config": "workspace:*",
+		"@playwright/test": "^1.63.0",
 		"@tailwindcss/postcss": "catalog:",
 		"@tanstack/react-query-devtools": "^5.102.8",
 		"@types/node": "catalog:",
