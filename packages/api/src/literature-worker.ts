@@ -3,8 +3,10 @@ import type { Database, Transaction } from "@blankfolio/db";
 import {
 	type AcquisitionReason,
 	literatureSnapshot,
+	type PaperStatusCheck,
 	paper,
 	paperAlias,
+	publicationStatus,
 	researchJob,
 	type SourceObservation,
 	type SourceOutcome,
@@ -17,8 +19,9 @@ import {
 } from "@blankfolio/db/schema/literature";
 import { researchProject } from "@blankfolio/db/schema/projects";
 import { TRPCError } from "@trpc/server";
-import { and, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
 import { type JobWithMetadata, PgBoss } from "pg-boss";
+import type { PublicationStatusSource, StatusLookup } from "./crossref";
 import {
 	type LiteratureSource,
 	literatureSources,
@@ -58,6 +61,8 @@ export type LiteratureWorkerOptions = {
 	/** Off unless explicitly enabled: a job naming a fixture source then fails that source. */
 	fixtureSources?: boolean;
 	sources?: Record<string, LiteratureSource>;
+	/** Without one, snapshots record that publication status was not checked. */
+	statusSource?: PublicationStatusSource;
 	now?: () => Date;
 	sleep?: (milliseconds: number) => Promise<void>;
 };
@@ -105,6 +110,29 @@ function keepRecords(executions: Execution[]) {
 			for (const alias of aliases) byAlias.set(alias, entry);
 		}
 	return kept;
+}
+
+/** Statuses confirmed within this window are reused rather than looked up again. */
+const statusFreshSeconds = 24 * 60 * 60;
+const recordDoi = (record: SourceRecord) => record.doi?.toLowerCase() ?? null;
+/** Stable key order, since jsonb does not keep the order objects were written in. */
+const canonical = (value: unknown) =>
+	JSON.stringify(value, (_key, item) =>
+		item && typeof item === "object" && !Array.isArray(item)
+			? Object.fromEntries(
+					Object.entries(item).sort(([a], [b]) => a.localeCompare(b)),
+				)
+			: item,
+	);
+async function latestStatuses(db: Database | Transaction, dois: string[]) {
+	if (!dois.length)
+		return new Map<string, typeof publicationStatus.$inferSelect>();
+	const rows = await db
+		.selectDistinctOn([publicationStatus.doi])
+		.from(publicationStatus)
+		.where(inArray(publicationStatus.doi, dois))
+		.orderBy(publicationStatus.doi, desc(publicationStatus.revision));
+	return new Map(rows.map((row) => [row.doi, row]));
 }
 
 /** Project tombstone/archive and account eligibility, re-checked before every stage. */
@@ -160,6 +188,7 @@ export function createLiteratureWorker({
 	quotas = {},
 	fixtureSources = false,
 	sources = literatureSources,
+	statusSource,
 	now = () => new Date(),
 	sleep = (milliseconds) =>
 		new Promise((resolve) => setTimeout(resolve, milliseconds)),
@@ -493,7 +522,92 @@ export function createLiteratureWorker({
 			);
 	}
 
-	async function publish(jobId: string) {
+	async function recordStatus(
+		doi: string,
+		answer: Exclude<StatusLookup, { outcome: "failed" }>,
+	) {
+		const content =
+			answer.outcome === "checked"
+				? {
+						registered: true,
+						updates: answer.updates,
+						relatedVersions: answer.relatedVersions,
+					}
+				: { registered: false, updates: [], relatedVersions: [] };
+		await db.transaction(async (tx) => {
+			await tx.execute(
+				sql`select pg_advisory_xact_lock(hashtext(${`publication-status:${doi}`}))`,
+			);
+			const latest = (await latestStatuses(tx, [doi])).get(doi);
+			const checkedAt = now();
+			if (
+				latest &&
+				canonical({
+					registered: latest.registered,
+					updates: latest.updates,
+					relatedVersions: latest.relatedVersions,
+				}) === canonical(content)
+			)
+				await tx
+					.update(publicationStatus)
+					.set({ checkedAt })
+					.where(eq(publicationStatus.id, latest.id));
+			else
+				await tx.insert(publicationStatus).values({
+					id: randomUUID(),
+					doi,
+					revision: (latest?.revision ?? 0) + 1,
+					...content,
+					observedAt: checkedAt,
+					checkedAt,
+				});
+		});
+	}
+
+	/**
+	 * Checks each kept DOI the agency registers, reusing answers confirmed within a day. Stops at
+	 * the first failure so the rest stay unknown; returns null once the job may not continue.
+	 */
+	async function reconcileStatuses(jobId: string, executions: Execution[]) {
+		if (!statusSource) return { errorClass: "not-configured" };
+		const dois = [
+			...new Set(
+				keepRecords(executions).flatMap(({ record }) => {
+					const doi = recordDoi(record);
+					return doi && statusSource.covers(doi) ? [doi] : [];
+				}),
+			),
+		];
+		const known = await latestStatuses(db, dois);
+		let requested = false;
+		for (const doi of dois) {
+			const latest = known.get(doi);
+			if (
+				latest &&
+				now().getTime() - latest.checkedAt.getTime() <=
+					statusFreshSeconds * 1000
+			)
+				continue;
+			if (!(await claim(jobId))) return null;
+			if (await pausedFor(statusSource.id))
+				return { errorClass: "rate-limited" };
+			if (requested) await sleep(statusSource.minIntervalSeconds * 1000);
+			requested = true;
+			const answer = await statusSource.lookup(doi);
+			if (answer.outcome === "failed") {
+				if (answer.retryAfterSeconds)
+					await pause(statusSource.id, answer.retryAfterSeconds);
+				return { errorClass: answer.errorClass };
+			}
+			await recordStatus(doi, answer);
+		}
+		return { errorClass: null };
+	}
+
+	async function publish(
+		jobId: string,
+		statusRun: { errorClass: string | null },
+	) {
 		await db.transaction(async (tx) => {
 			const job = await lockActiveJob(tx, jobId);
 			if (job?.state !== "running") return;
@@ -604,6 +718,39 @@ export function createLiteratureWorker({
 				);
 				return false;
 			});
+			const checkedAt = now();
+			const statuses = await latestStatuses(
+				tx,
+				members.flatMap(({ record }) => recordDoi(record) ?? []),
+			);
+			const statusChecks = new Map(
+				members.map((entry): [Kept, PaperStatusCheck] => {
+					const doi = recordDoi(entry.record);
+					if (!doi) return [entry, { check: "no-doi" }];
+					if (statusSource && !statusSource.covers(doi))
+						return [entry, { check: "not-covered" }];
+					const status = statuses.get(doi);
+					return [
+						entry,
+						status &&
+						checkedAt.getTime() - status.checkedAt.getTime() <=
+							statusFreshSeconds * 1000
+							? {
+									check: status.registered ? "checked" : "not-registered",
+									doi,
+									revision: status.revision,
+									checkedAt: status.checkedAt.toISOString(),
+									updates: status.updates,
+									relatedVersions: status.relatedVersions,
+								}
+							: { check: "failed", doi },
+					];
+				}),
+			);
+			const count = (check: PaperStatusCheck["check"]) =>
+				[...statusChecks.values()].filter((status) => status.check === check)
+					.length;
+			const answeredStatuses = count("checked") + count("not-registered");
 			const snapshotId = randomUUID();
 			await tx.insert(literatureSnapshot).values({
 				id: snapshotId,
@@ -621,6 +768,21 @@ export function createLiteratureWorker({
 						: "partial",
 				recordCap,
 				paperCount: members.length,
+				statusCheck: {
+					source: statusSource?.id ?? "crossref",
+					outcome: !statusSource
+						? "not-run"
+						: count("failed") === 0
+							? "complete"
+							: answeredStatuses
+								? "partial"
+								: "failed",
+					checked: count("checked"),
+					notRegistered: count("not-registered"),
+					unknown: count("failed"),
+					errorClass: statusRun.errorClass,
+					checkedAt: checkedAt.toISOString(),
+				},
 				allocations: {
 					reserved: sourceAllocations(job.input.scope.sources).reserved,
 					sources: executions.map((execution) => {
@@ -648,6 +810,7 @@ export function createLiteratureWorker({
 						acquisitionReason: entry.record.acquisitionReason,
 						observation: entry.record,
 						alsoObserved: entry.alsoObserved,
+						statusCheck: statusChecks.get(entry),
 					})),
 				);
 			await tx
@@ -676,9 +839,23 @@ export function createLiteratureWorker({
 		if (!(await claim(jobId))) return;
 		await db
 			.update(researchJob)
+			.set({ stage: "reconciling", updatedAt: new Date() })
+			.where(eq(researchJob.id, jobId));
+		const statusRun = await reconcileStatuses(
+			jobId,
+			(
+				await db
+					.select()
+					.from(sourceExecution)
+					.where(eq(sourceExecution.jobId, jobId))
+			).sort((a, b) => order.indexOf(a.source) - order.indexOf(b.source)),
+		);
+		if (!statusRun || !(await claim(jobId))) return;
+		await db
+			.update(researchJob)
 			.set({ stage: "publishing", updatedAt: new Date() })
 			.where(eq(researchJob.id, jobId));
-		await publish(jobId);
+		await publish(jobId, statusRun);
 	};
 }
 

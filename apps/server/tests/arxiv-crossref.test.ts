@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createArxivSource } from "@blankfolio/api/arxiv";
+import { createCrossrefStatus } from "@blankfolio/api/crossref";
 import {
 	literatureSources,
 	type SourceSettings,
@@ -10,6 +11,12 @@ import type { AppRouter } from "@blankfolio/api/routers/index";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { expect, test } from "vitest";
 import { arxivEntry, arxivFeed, atom } from "./arxiv-fixture";
+import {
+	crossrefJson,
+	crossrefNotFound,
+	crossrefUpdate,
+	crossrefWork,
+} from "./crossref-fixture";
 import {
 	json,
 	openAlexFetch,
@@ -52,6 +59,9 @@ function researcherFor(workspace: Workspace, cookie: string) {
 	});
 }
 type Researcher = ReturnType<typeof researcherFor>;
+type Paper = Awaited<
+	ReturnType<Researcher["literature"]["snapshot"]["query"]>
+>["papers"][number];
 
 async function projectWithScope(
 	researcher: Researcher,
@@ -143,6 +153,10 @@ function providerWorker(handler: Parameters<typeof openAlexFetch>[0]) {
 			}),
 			arxiv: createArxivSource({ fetch: recorder.fetch, now }),
 		},
+		statusSource: createCrossrefStatus({
+			fetch: recorder.fetch,
+			mailto: "operator@example.test",
+		}),
 	};
 	return {
 		options,
@@ -479,5 +493,305 @@ scenario(
 		});
 		expect(during.snapshot?.coverage).toBe("partial");
 		expect(worker.calls).toHaveLength(5);
+	},
+);
+
+scenario(
+	"Crossref reconciliation exposes retractions, corrections, withdrawals and last-checked dates, flags disallowed support, and versions later status changes without rewriting earlier snapshots",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("crossref-status"),
+		);
+		const projectId = await projectWithScope(researcher, {
+			queries: ["tabular transfer learning"],
+			sources: ["openalex", "arxiv"],
+		});
+		const noDoi = { doi: null, ids: { openalex: "https://openalex.org/W5" } };
+		let secondRetracted = false;
+		const worker = providerWorker((url) => {
+			if (url.hostname === "api.openalex.org")
+				return json(
+					openAlexPage([
+						openAlexWork(1),
+						openAlexWork(2),
+						openAlexWork(3),
+						openAlexWork(4),
+						openAlexWork(5, noDoi),
+					]),
+				);
+			if (url.hostname === "export.arxiv.org")
+				return atom(
+					arxivFeed([
+						arxivEntry("2401.00003"),
+						arxivEntry("2401.00009", {
+							version: 2,
+							comment: "This paper has been withdrawn by the author",
+						}),
+					]),
+				);
+			const doi = decodeURIComponent(url.pathname.replace("/works/", ""));
+			if (doi === "10.1234/recorded.1")
+				return crossrefJson(
+					crossrefWork(doi, {
+						"updated-by": [
+							crossrefUpdate("retraction", "Retraction", "2025-02-06"),
+							crossrefUpdate("correction", "Correction", "2024-03-06", {
+								source: "publisher",
+							}),
+						],
+					}),
+				);
+			if (doi === "10.1234/recorded.2")
+				return crossrefJson(
+					crossrefWork(doi, {
+						"updated-by": [
+							crossrefUpdate("correction", "Correction", "2025-01-10"),
+							...(secondRetracted
+								? [crossrefUpdate("retraction", "Retraction", "2026-09-10")]
+								: []),
+						],
+					}),
+				);
+			if (doi === "10.1234/recorded.3")
+				return crossrefJson(
+					crossrefWork(doi, {
+						relation: {
+							"has-preprint": [
+								{
+									"id-type": "doi",
+									id: "10.48550/arXiv.2401.00003",
+									"asserted-by": "subject",
+								},
+							],
+						},
+					}),
+				);
+			return crossrefNotFound();
+		});
+		const run = async () => {
+			const jobId = await search(researcher, projectId);
+			await workspace.runQueuedJobs(worker.options);
+			return (await outcome(researcher, projectId, jobId)).snapshot;
+		};
+		const first = await run();
+		const checkedAt = first?.statusCheck?.checkedAt;
+		expect(first?.statusCheck).toEqual({
+			source: "crossref",
+			outcome: "complete",
+			checked: 3,
+			notRegistered: 1,
+			unknown: 0,
+			errorClass: null,
+			checkedAt: expect.any(String),
+		});
+		const crossrefCalls = () =>
+			worker.calls.filter(({ url }) => url.hostname === "api.crossref.org");
+		expect(
+			crossrefCalls().map(({ url }) => [
+				decodeURIComponent(url.pathname),
+				url.searchParams.get("mailto"),
+			]),
+		).toEqual(
+			[1, 2, 3, 4].map((n) => [
+				`/works/10.1234/recorded.${n}`,
+				"operator@example.test",
+			]),
+		);
+
+		const status = (snapshot: typeof first, match: (p: Paper) => boolean) =>
+			snapshot?.papers.find(match)?.publicationStatus;
+		const byTitle = (title: string) => (p: Paper) => p.title === title;
+		const byArxiv = (id: string) => (p: Paper) =>
+			p.identifiers.includes(`arxiv:${id}`);
+		expect(status(first, byTitle("Recorded work W1"))).toEqual({
+			state: "retracted",
+			positiveSupport: "disallowed",
+			check: "checked",
+			checkedAt,
+			newerStatusKnown: false,
+			updates: [
+				{
+					type: "correction",
+					label: "Correction",
+					source: "publisher",
+					notice: "doi:10.1234/notice.correction.2024-03-06",
+					date: "2024-03-06",
+				},
+				{
+					type: "retraction",
+					label: "Retraction",
+					source: "retraction-watch",
+					notice: "doi:10.1234/notice.retraction.2025-02-06",
+					date: "2025-02-06",
+				},
+			],
+		});
+		expect(status(first, byTitle("Recorded work W2"))).toMatchObject({
+			state: "corrected",
+			positiveSupport: "review",
+			check: "checked",
+		});
+		expect(status(first, byTitle("Recorded work W3"))).toMatchObject({
+			state: "no-known-updates",
+			positiveSupport: "allowed",
+			check: "checked",
+			updates: [],
+		});
+		const preprint = first?.papers.find(byArxiv("2401.00003"));
+		expect(
+			first?.papers.find(byTitle("Recorded work W3"))?.relatedVersions,
+		).toEqual([
+			{
+				identifier: "doi:10.48550/arxiv.2401.00003",
+				relation: "preprint",
+				note: "Crossref",
+				paperId: preprint?.id,
+			},
+		]);
+		expect(status(first, byTitle("Recorded work W4"))).toMatchObject({
+			state: "unknown",
+			positiveSupport: "allowed",
+			check: "not-registered",
+		});
+		expect(status(first, byTitle("Recorded work W5"))).toMatchObject({
+			state: "unknown",
+			check: "no-doi",
+			checkedAt: null,
+		});
+		expect(status(first, byArxiv("2401.00009"))).toMatchObject({
+			state: "withdrawn",
+			positiveSupport: "disallowed",
+			check: "not-covered",
+			updates: [
+				{
+					type: "withdrawal",
+					label: "Withdrawn, according to the arXiv comment",
+					source: "arxiv",
+					notice: "arxiv:2401.00009v2",
+					date: "2024-08-09",
+				},
+			],
+		});
+
+		// Within a day the same statuses are reused without asking Crossref again.
+		worker.advance(2 * 60 * 60);
+		await run();
+		expect(crossrefCalls()).toHaveLength(4);
+
+		// Days later W2 is retracted: the new snapshot shows it, and the earlier one keeps what
+		// it recorded while saying a newer status is known.
+		secondRetracted = true;
+		worker.advance(3 * 24 * 60 * 60);
+		const later = await run();
+		expect(crossrefCalls()).toHaveLength(8);
+		expect(status(later, byTitle("Recorded work W2"))).toMatchObject({
+			state: "retracted",
+			positiveSupport: "disallowed",
+			newerStatusKnown: false,
+		});
+		const reread = await researcher.literature.snapshot.query({
+			projectId,
+			snapshotId: first?.id ?? "",
+		});
+		expect(status(reread, byTitle("Recorded work W2"))).toMatchObject({
+			state: "corrected",
+			checkedAt,
+			newerStatusKnown: true,
+		});
+		expect(status(reread, byTitle("Recorded work W1"))).toMatchObject({
+			state: "retracted",
+			newerStatusKnown: false,
+		});
+	},
+);
+
+scenario(
+	"a Crossref outage or rate limit leaves statuses unknown rather than clear, says why, and pauses lookups for every project",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("crossref-failures"),
+		);
+		let mode: "outage" | "limited" = "outage";
+		const worker = providerWorker((url) => {
+			if (url.hostname === "api.openalex.org")
+				return json(openAlexPage([1, 2, 3, 4].map((n) => openAlexWork(n))));
+			const doi = decodeURIComponent(url.pathname.replace("/works/", ""));
+			if (mode === "limited")
+				return new Response("Too Many Requests", {
+					status: 429,
+					headers: { "retry-after": "120" },
+				});
+			return doi === "10.1234/recorded.1"
+				? crossrefJson(crossrefWork(doi))
+				: new Response("Service Unavailable", { status: 503 });
+		});
+		const crossrefCalls = () =>
+			worker.calls.filter(({ url }) => url.hostname === "api.crossref.org");
+		const run = async (projectId: string, options = worker.options) => {
+			const jobId = await search(researcher, projectId);
+			await workspace.runQueuedJobs(options);
+			return (await outcome(researcher, projectId, jobId)).snapshot;
+		};
+
+		const outage = await projectWithScope(researcher, {
+			queries: ["calibration"],
+			sources: ["openalex"],
+		});
+		const cutShort = await run(outage);
+		expect(cutShort?.statusCheck).toMatchObject({
+			outcome: "partial",
+			checked: 1,
+			unknown: 3,
+			errorClass: "source-error",
+		});
+		expect(crossrefCalls()).toHaveLength(2);
+		expect(
+			cutShort?.papers.map((p) => [
+				p.title,
+				p.publicationStatus.state,
+				p.publicationStatus.check,
+			]),
+		).toEqual([
+			["Recorded work W1", "no-known-updates", "checked"],
+			["Recorded work W2", "unknown", "failed"],
+			["Recorded work W3", "unknown", "failed"],
+			["Recorded work W4", "unknown", "failed"],
+		]);
+
+		mode = "limited";
+		worker.advance(2 * 24 * 60 * 60);
+		const limited = await run(outage);
+		expect(limited?.statusCheck).toMatchObject({
+			outcome: "failed",
+			checked: 0,
+			unknown: 4,
+			errorClass: "rate-limited",
+		});
+		expect(crossrefCalls()).toHaveLength(3);
+
+		const other = await projectWithScope(researcher, {
+			queries: ["domain shift"],
+			sources: ["openalex"],
+		});
+		const paused = await run(other);
+		expect(paused?.statusCheck).toMatchObject({
+			outcome: "failed",
+			errorClass: "rate-limited",
+		});
+		expect(crossrefCalls()).toHaveLength(3);
+
+		// A worker without a status source records that no check ran.
+		const { statusSource: _, ...unchecked } = worker.options;
+		const skipped = await run(other, unchecked);
+		expect(skipped?.statusCheck).toMatchObject({
+			outcome: "not-run",
+			errorClass: "not-configured",
+		});
+		expect(skipped?.papers[0]?.publicationStatus).toMatchObject({
+			state: "unknown",
+			positiveSupport: "allowed",
+		});
 	},
 );

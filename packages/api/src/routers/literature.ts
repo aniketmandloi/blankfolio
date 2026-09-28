@@ -6,6 +6,7 @@ import {
 	literatureScopeRevision,
 	literatureSnapshot,
 	paper,
+	publicationStatus,
 	researchJob,
 	type SourceRecord,
 	snapshotPaper,
@@ -14,7 +15,7 @@ import {
 import type { ResearchBrief } from "@blankfolio/db/schema/projects";
 import { briefRevision } from "@blankfolio/db/schema/projects";
 import { TRPCError } from "@trpc/server";
-import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, max, sql } from "drizzle-orm";
 import { z } from "zod";
 import { researchProcedure, router } from "../index";
 import {
@@ -26,6 +27,7 @@ import {
 	sourceAvailability,
 } from "../literature-sources";
 import { requireProject } from "../project-lifecycle";
+import { publicationStatusView } from "../publication-status";
 import { activeRunsPerAccount } from "../research-jobs";
 import { budgetStatus } from "../usage-budget";
 import { assertDiscoveryBrief, briefSchema } from "./projects";
@@ -516,6 +518,7 @@ export const literatureRouter = router({
 						acquisitionReason: snapshotPaper.acquisitionReason,
 						observation: snapshotPaper.observation,
 						alsoObserved: snapshotPaper.alsoObserved,
+						statusCheck: snapshotPaper.statusCheck,
 					})
 					.from(snapshotPaper)
 					.innerJoin(paper, eq(paper.id, snapshotPaper.paperId))
@@ -535,49 +538,90 @@ export const literatureRouter = router({
 					])
 						for (const alias of identifiers(record))
 							inSnapshot.set(alias, row.id);
+				const checkedDois = rows.flatMap((row) =>
+					row.statusCheck && "revision" in row.statusCheck
+						? [row.statusCheck.doi]
+						: [],
+				);
+				const latestRevisions = new Map(
+					checkedDois.length
+						? (
+								await tx
+									.select({
+										doi: publicationStatus.doi,
+										revision: max(publicationStatus.revision),
+									})
+									.from(publicationStatus)
+									.where(inArray(publicationStatus.doi, checkedDois))
+									.groupBy(publicationStatus.doi)
+							).map((row) => [row.doi, row.revision ?? 0])
+						: [],
+				);
 				// A snapshot shows what its source observed, not later corrections to the paper.
-				const papers = rows.map(({ observation, alsoObserved, ...row }) => {
-					const seen = observation ?? { ...row, key: "" };
-					return {
-						id: row.id,
-						source: row.source,
-						acquisitionReason: row.acquisitionReason,
-						title: seen.title,
-						authors: seen.authors,
-						year: seen.year,
-						doi: seen.doi,
-						url: seen.url,
-						identifiers: observation
-							? identifiers(observation)
-							: row.doi
-								? [`doi:${row.doi.toLowerCase()}`]
-								: [],
-						publicationDate: observation?.publicationDate ?? null,
-						preprint: observation?.preprint ?? null,
-						workType: observation?.workType ?? null,
-						abstractAvailable: observation?.abstractAvailable ?? false,
-						sourceUpdatedAt: observation?.sourceUpdatedAt ?? null,
-						version: observation?.version ?? null,
-						versionDate: observation?.versionDate ?? null,
-						relatedVersions: (observation?.relatedVersions ?? []).map(
-							(related) => ({
-								note: null,
-								...related,
-								paperId: inSnapshot.get(related.identifier) ?? null,
-							}),
-						),
-						alsoObserved: alsoObserved.map(({ source, record }) => ({
-							source,
-							title: record.title,
-							url: record.url,
-							identifiers: identifiers(record),
-							version: record.version ?? null,
-							versionDate: record.versionDate ?? null,
-							preprint: record.preprint ?? null,
-							abstractAvailable: record.abstractAvailable ?? false,
-						})),
-					};
-				});
+				const papers = rows.map(
+					({ observation, alsoObserved, statusCheck, ...row }) => {
+						const seen = observation ?? { ...row, key: "" };
+						return {
+							id: row.id,
+							source: row.source,
+							acquisitionReason: row.acquisitionReason,
+							title: seen.title,
+							authors: seen.authors,
+							year: seen.year,
+							doi: seen.doi,
+							url: seen.url,
+							identifiers: observation
+								? identifiers(observation)
+								: row.doi
+									? [`doi:${row.doi.toLowerCase()}`]
+									: [],
+							publicationDate: observation?.publicationDate ?? null,
+							preprint: observation?.preprint ?? null,
+							workType: observation?.workType ?? null,
+							abstractAvailable: observation?.abstractAvailable ?? false,
+							sourceUpdatedAt: observation?.sourceUpdatedAt ?? null,
+							version: observation?.version ?? null,
+							versionDate: observation?.versionDate ?? null,
+							relatedVersions: [
+								...(observation?.relatedVersions ?? []),
+								...(statusCheck && "relatedVersions" in statusCheck
+									? statusCheck.relatedVersions
+									: []),
+							]
+								.filter(
+									(related, index, all) =>
+										all.findIndex(
+											(other) => other.identifier === related.identifier,
+										) === index,
+								)
+								.map((related) => ({
+									note: null,
+									...related,
+									paperId: inSnapshot.get(related.identifier) ?? null,
+								})),
+							publicationStatus: publicationStatusView(
+								statusCheck,
+								[
+									observation,
+									...alsoObserved.map((seen) => seen.record),
+								].flatMap((record) => record?.updates ?? []),
+								statusCheck && "doi" in statusCheck
+									? latestRevisions.get(statusCheck.doi)
+									: undefined,
+							),
+							alsoObserved: alsoObserved.map(({ source, record }) => ({
+								source,
+								title: record.title,
+								url: record.url,
+								identifiers: identifiers(record),
+								version: record.version ?? null,
+								versionDate: record.versionDate ?? null,
+								preprint: record.preprint ?? null,
+								abstractAvailable: record.abstractAvailable ?? false,
+							})),
+						};
+					},
+				);
 				return {
 					...snapshot.snapshot,
 					scope: snapshot.scope,

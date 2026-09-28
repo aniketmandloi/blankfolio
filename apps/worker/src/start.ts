@@ -1,3 +1,4 @@
+import { createCrossrefStatus } from "@blankfolio/api/crossref";
 import {
 	literatureSources,
 	parseSourcePrices,
@@ -21,6 +22,7 @@ const stop = await runLiteratureWorker(
 			...literatureSources,
 			openalex: createOpenAlexSource({ apiKey: ENV.OPENALEX_API_KEY }),
 		},
+		statusSource: createCrossrefStatus({ mailto: ENV.CROSSREF_MAILTO }),
 	},
 	ENV.WORKER_POLL_INTERVAL_SECONDS,
 );
