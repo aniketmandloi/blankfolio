@@ -804,6 +804,7 @@ scenario(
 		expect(skipped?.papers[0]?.publicationStatus).toMatchObject({
 			state: "unknown",
 			positiveSupport: "allowed",
+			check: "not-run",
 		});
 	},
 );

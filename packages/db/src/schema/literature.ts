@@ -358,7 +358,7 @@ export type PaperStatusCheck =
 			relatedVersions: RelatedVersion[];
 	  }
 	| { check: "failed"; doi: string }
-	| { check: "not-covered" | "no-doi" };
+	| { check: "not-covered" | "no-doi" | "not-run" };
 
 /**
  * A DOI's publication status as a public fact. A changed answer adds a revision, so earlier

@@ -793,7 +793,8 @@ export function createLiteratureWorker({
 				members.map((entry): [Kept, PaperStatusCheck] => {
 					const doi = recordDoi(entry.record);
 					if (!doi) return [entry, { check: "no-doi" }];
-					if (statusSource && !statusSource.covers(doi))
+					if (!statusSource) return [entry, { check: "not-run" }];
+					if (!statusSource.covers(doi))
 						return [entry, { check: "not-covered" }];
 					const status = statuses.get(doi);
 					return [
