@@ -4,6 +4,7 @@ import type { AppRouter } from "@blankfolio/api/routers/index";
 import { Button } from "@blankfolio/ui/components/button";
 import { Input } from "@blankfolio/ui/components/input";
 import { Label } from "@blankfolio/ui/components/label";
+import { Skeleton } from "@blankfolio/ui/components/skeleton";
 import { Textarea } from "@blankfolio/ui/components/textarea";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
@@ -18,6 +19,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import ResearchTrail from "@/components/research-trail";
 import {
 	announceUnsavedBrief,
 	confirmLeavingUnsavedBrief,
@@ -344,8 +346,10 @@ export default function ProjectOverview({ id }: { id: string }) {
 					</Link>
 					{projectQuery.isPending ? (
 						<div className="detail-loading" aria-live="polite">
-							<FileClock size={18} strokeWidth={1.5} aria-hidden="true" />
-							Loading the saved brief…
+							<p className="sr-only">Loading the saved brief…</p>
+							<Skeleton className="h-10 w-2/3" />
+							<Skeleton className="h-4 w-1/3" />
+							<Skeleton className="mt-4 h-80" />
 						</div>
 					) : (
 						<section className="detail-unavailable" role="alert">
@@ -397,6 +401,12 @@ export default function ProjectOverview({ id }: { id: string }) {
 					</div>
 				</header>
 
+				<ResearchTrail
+					projectId={id}
+					current="brief"
+					onNavigate={(event) => confirmLeavingUnsavedBrief(event, isDirty)}
+				/>
+
 				<div className="detail-layout">
 					<div className="detail-primary-column">
 						<section className="brief-panel" aria-labelledby="brief-heading">
@@ -422,7 +432,7 @@ export default function ProjectOverview({ id }: { id: string }) {
 										<Label htmlFor="brief-track">Topic track</Label>
 										<select
 											id="brief-track"
-											className="h-8 w-full min-w-0 rounded-none border px-2 outline-none focus-visible:ring-1 focus-visible:ring-ring/50"
+											className="h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/50 dark:bg-input/30"
 											value={briefFields.evaluationTrack}
 											onChange={(event) =>
 												updateDraft("evaluationTrack", event.target.value)
