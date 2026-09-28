@@ -65,6 +65,48 @@ type Job = typeof researchJob.$inferSelect;
 type Execution = typeof sourceExecution.$inferSelect;
 type Failure = { outcome: "failed"; errorClass: string };
 
+type Kept = {
+	record: SourceRecord;
+	source: string;
+	aliases: string[];
+	alsoObserved: SourceObservation[];
+};
+/**
+ * Records are the same paper only when they share an exact identifier; titles never merge.
+ * Executions arrive in scope order, so earlier sources keep the primary observation.
+ */
+function keepRecords(executions: Execution[]) {
+	const kept: Kept[] = [];
+	const byAlias = new Map<string, Kept>();
+	for (const execution of executions)
+		for (const record of execution.records ?? []) {
+			const aliases = recordAliases(record);
+			const same = aliases
+				.map((alias) => byAlias.get(alias))
+				.find((entry) => entry !== undefined);
+			if (same) {
+				for (const alias of aliases)
+					if (!byAlias.has(alias)) {
+						byAlias.set(alias, same);
+						same.aliases.push(alias);
+					}
+				if (same.source !== execution.source)
+					same.alsoObserved.push({ source: execution.source, record });
+				continue;
+			}
+			if (kept.length >= recordCap) continue;
+			const entry: Kept = {
+				record,
+				source: execution.source,
+				aliases,
+				alsoObserved: [],
+			};
+			kept.push(entry);
+			for (const alias of aliases) byAlias.set(alias, entry);
+		}
+	return kept;
+}
+
 /** Project tombstone/archive and account eligibility, re-checked before every stage. */
 async function guard(
 	tx: Transaction,
@@ -479,41 +521,7 @@ export function createLiteratureWorker({
 			executions.sort(
 				(a, b) => order.indexOf(a.source) - order.indexOf(b.source),
 			);
-			// Records are the same paper only when they share an exact identifier; titles never merge.
-			type Kept = {
-				record: SourceRecord;
-				source: string;
-				aliases: string[];
-				alsoObserved: SourceObservation[];
-			};
-			const kept: Kept[] = [];
-			const byAlias = new Map<string, Kept>();
-			for (const execution of executions)
-				for (const record of execution.records ?? []) {
-					const aliases = recordAliases(record);
-					const same = aliases
-						.map((alias) => byAlias.get(alias))
-						.find((entry) => entry !== undefined);
-					if (same) {
-						for (const alias of aliases)
-							if (!byAlias.has(alias)) {
-								byAlias.set(alias, same);
-								same.aliases.push(alias);
-							}
-						if (same.source !== execution.source)
-							same.alsoObserved.push({ source: execution.source, record });
-						continue;
-					}
-					if (kept.length >= recordCap) continue;
-					const entry = {
-						record,
-						source: execution.source,
-						aliases,
-						alsoObserved: [],
-					};
-					kept.push(entry);
-					for (const alias of aliases) byAlias.set(alias, entry);
-				}
+			const kept = keepRecords(executions);
 			const owners = kept.length
 				? new Map(
 						(
