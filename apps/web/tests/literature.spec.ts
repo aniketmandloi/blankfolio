@@ -47,6 +47,14 @@ test("a researcher saves a Literature Scope, confirms the exact queries and retu
 	await page.getByRole("button", { name: "View snapshot" }).first().click();
 	await expect(page.getByText(/Partial coverage/)).toBeVisible();
 	await expect(page.getByText("Partial answer")).toBeVisible();
+	await expect(
+		page.getByText(/reserved for later arXiv and status checks/),
+	).toBeVisible();
+	await expect(page.getByText(/^Preprint · /).first()).toBeVisible();
+	await expect(page.getByText(/Metadata only/).first()).toBeVisible();
+	await expect(
+		page.getByRole("link", { name: /^doi:10\.5555\/fixture\./ }).first(),
+	).toHaveAttribute("href", /^https:\/\/doi\.org\/10\.5555\/fixture\./);
 	const width = await page.evaluate(
 		() => document.documentElement.scrollWidth - window.innerWidth,
 	);

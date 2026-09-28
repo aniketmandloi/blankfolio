@@ -1,7 +1,43 @@
 import { createHash } from "node:crypto";
-import type { SourceRecord } from "@blankfolio/db/schema/literature";
+import type {
+	LiteratureScope,
+	SourceRecord,
+} from "@blankfolio/db/schema/literature";
 import { z } from "zod";
+import { createOpenAlexSource } from "./openalex";
+import { TransientSourceError, UncertainSourceOutcome } from "./source-errors";
 
+export {
+	maxRetryAfterSeconds,
+	SourceUnavailableError,
+	TransientSourceError,
+	UncertainSourceOutcome,
+} from "./source-errors";
+
+export const recordCap = 200;
+/** Held back from every discovery run for the later arXiv and status stages. */
+export const laterStageReserve = 40;
+/** Records each selected source may contribute; the reserve is never allocated. */
+export const sourceAllocation = (sourceCount: number) =>
+	Math.floor((recordCap - laterStageReserve) / sourceCount);
+/** Cached provider responses older than this are deleted and never served, even as stale. */
+export const responseCacheRetentionSeconds = 7 * 24 * 60 * 60;
+
+/** A record's exact identifiers, most stable first; its key is always one of them. */
+export function recordAliases(record: SourceRecord) {
+	return [
+		...new Set([
+			...(record.doi ? [`doi:${record.doi.toLowerCase()}`] : []),
+			...(record.identifiers ?? []),
+			record.key,
+		]),
+	];
+}
+
+export type SourceCache = {
+	get: (key: string) => Promise<{ body: unknown; fetchedAt: Date } | null>;
+	set: (key: string, body: unknown) => Promise<void>;
+};
 export type SourceRequest = {
 	queries: string[];
 	dateFrom: string;
@@ -9,6 +45,11 @@ export type SourceRequest = {
 	includeFoundations: boolean;
 	limit: number;
 	attempt: number;
+	/** No automatic attempt follows this one, so a stale cached answer beats none. */
+	finalAttempt: boolean;
+	/** Paid routes with a configured price; the source must not call any other paid route. */
+	routes: string[];
+	cache: SourceCache;
 };
 export type SourceResult = {
 	outcome: "succeeded" | "empty" | "partial";
@@ -17,34 +58,36 @@ export type SourceResult = {
 	cursor: string | null;
 	cacheAgeSeconds: number | null;
 	truncated: boolean;
-	/** Billable requests actually made, used to reconcile metered usage. */
-	requests: number;
+	/**
+	 * Billable requests per route, used to reconcile metered usage. A request whose outcome is
+	 * unknown counts as billed.
+	 */
+	usage: Record<string, number>;
 	errorClass: string | null;
+	/** The provider asked every caller to wait this long before its next request. */
+	pauseSeconds?: number;
 };
+type ChargeRequest = Pick<
+	SourceRequest,
+	"queries" | "limit" | "includeFoundations" | "routes"
+>;
 export type LiteratureSource = {
 	id: string;
 	label: string;
-	metered: boolean;
-	filters: (scope: {
-		dateFrom: string;
-		dateTo: string;
-		includeFoundations: boolean;
-	}) => { applied: string[]; unsupported: string[] };
+	/** Paid routes, each priced separately; the first is required and the rest are optional stages. */
+	routes: string[];
+	/** A deployment-wide daily quota must be configured before this source runs. */
+	quotaRequired: boolean;
+	/** Returns fabricated records; offered only where fixture sources are enabled. */
+	fixture?: boolean;
+	filters: (
+		scope: LiteratureScope,
+		routes: string[],
+	) => { applied: string[]; unsupported: string[] };
+	/** The most billable requests per route one attempt can make; reserved before it starts. */
+	maxRequests: (request: ChargeRequest) => Record<string, number>;
 	search: (request: SourceRequest) => Promise<SourceResult>;
 };
-
-/** The provider refused before doing billable work, so another attempt is safe. */
-export class TransientSourceError extends Error {
-	constructor(readonly retryAfterSeconds = 0) {
-		super("source-unavailable");
-	}
-}
-/** The request may have been processed and billed; its outcome is unknown. */
-export class UncertainSourceOutcome extends Error {
-	constructor() {
-		super("uncertain-outcome");
-	}
-}
 
 const digest = (text: string) =>
 	createHash("sha256").update(text).digest("hex").slice(0, 12);
@@ -64,7 +107,9 @@ function fixtureSource(
 	return {
 		id,
 		label,
-		metered,
+		routes: metered ? [id] : [],
+		quotaRequired: false,
+		fixture: true,
 		filters: ({ dateFrom, dateTo, includeFoundations }) => ({
 			applied: [
 				`publication date ${dateFrom} to ${dateTo}`,
@@ -73,6 +118,7 @@ function fixtureSource(
 			unsupported:
 				includeFoundations && metered ? ["older foundational work"] : [],
 		}),
+		maxRequests: ({ queries }) => (metered ? { [id]: queries.length } : {}),
 		async search(request) {
 			const text = request.queries.join(" ").toLowerCase();
 			const has = (behavior: string) =>
@@ -93,16 +139,21 @@ function fixtureSource(
 			request.queries.forEach((query, index) => {
 				if (index === failedQuery) return;
 				const hash = digest(query.trim().toLowerCase());
-				for (let i = 0; i < perQuery; i++)
+				for (let i = 0; i < perQuery; i++) {
+					const year = toYear - (i % (toYear - fromYear + 1));
 					discovery.push({
 						key: `fixture:${hash}:${i}`,
 						title: `Fixture study ${i + 1} for query ${hash}`,
 						authors: ["A. Fixture", "B. Example"],
-						year: toYear - (i % (toYear - fromYear + 1)),
+						year,
 						doi: `10.5555/fixture.${hash}.${i}`,
 						url: null,
 						acquisitionReason: "discovery",
+						publicationDate: `${year}-03-01`,
+						preprint: i % 3 === 0 ? true : i % 3 === 1 ? false : null,
+						abstractAvailable: i % 2 === 0,
 					});
+				}
 				for (let i = 0; i < foundations; i++)
 					older.push({
 						key: `fixture:${hash}:foundation:${i}`,
@@ -133,7 +184,7 @@ function fixtureSource(
 				cursor: truncated ? `offset:${records.length}` : null,
 				cacheAgeSeconds: has("cached") ? 6 * 60 * 60 : null,
 				truncated,
-				requests: request.queries.length,
+				usage: metered ? { [id]: request.queries.length } : {},
 				errorClass: failedQuery >= 0 ? "query-failed" : null,
 			};
 		},
@@ -151,11 +202,15 @@ export const literatureSources: Record<string, LiteratureSource> = {
 		"Fixture metered index (simulated cost)",
 		true,
 	),
+	/** Without credentials it fails visibly; the worker supplies a configured instance. */
+	openalex: createOpenAlexSource({}),
 };
 
-/** Micro-dollars per query request; a metered source without a price is disabled. */
+/** Micro-dollars per request on each paid route; a source whose required route is unpriced is disabled. */
 export type SourcePrices = Partial<Record<string, number>>;
-export function parseSourcePrices(json: string | undefined): SourcePrices {
+/** Micro-dollars per UTC day per source, shared by every worker in the deployment. */
+export type SourceQuotas = Partial<Record<string, number>>;
+function parseUsdTable(json: string | undefined) {
 	if (!json) return {};
 	const usd = z
 		.record(z.string(), z.number().nonnegative())
@@ -164,3 +219,54 @@ export function parseSourcePrices(json: string | undefined): SourcePrices {
 		Object.entries(usd).map(([id, price]) => [id, Math.round(price * 1e6)]),
 	);
 }
+/** JSON of US dollars per request, keyed by route. */
+export const parseSourcePrices = (json: string | undefined): SourcePrices =>
+	parseUsdTable(json);
+/** JSON of US dollars per UTC day, keyed by source. */
+export const parseSourceQuotas = (json: string | undefined): SourceQuotas =>
+	parseUsdTable(json);
+
+export type SourceSettings = {
+	prices: SourcePrices;
+	quotas: SourceQuotas;
+	/** Fixture sources fabricate papers, so only tests and local development enable them. */
+	fixtureSources: boolean;
+};
+/** Which paid routes are usable now, or why the whole source is disabled. */
+export function sourceAvailability(
+	source: LiteratureSource,
+	{ prices, quotas, fixtureSources }: SourceSettings,
+) {
+	const [required] = source.routes;
+	const blockedBy =
+		source.fixture && !fixtureSources
+			? ("fixtures-disabled" as const)
+			: required !== undefined && prices[required] === undefined
+				? ("pricing-unknown" as const)
+				: source.quotaRequired && quotas[source.id] === undefined
+					? ("quota-unknown" as const)
+					: null;
+	return {
+		blockedBy,
+		routes: source.routes.filter((route) => prices[route] !== undefined),
+	};
+}
+/** The conservative maximum one attempt can cost, reserved before it starts. */
+export function maxChargeMicros(
+	source: LiteratureSource,
+	request: ChargeRequest,
+	prices: SourcePrices,
+) {
+	return Object.entries(source.maxRequests(request)).reduce(
+		(total, [route, requests]) => total + (prices[route] ?? 0) * requests,
+		0,
+	);
+}
+export const usageMicros = (
+	usage: Record<string, number>,
+	prices: SourcePrices,
+) =>
+	Object.entries(usage).reduce(
+		(total, [route, requests]) => total + (prices[route] ?? 0) * requests,
+		0,
+	);

@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
-import type { SourcePrices } from "@blankfolio/api/literature-sources";
+import type {
+	SourcePrices,
+	SourceSettings,
+} from "@blankfolio/api/literature-sources";
 import {
 	createLiteratureJobHandler,
 	type LiteratureJobData,
@@ -22,6 +25,11 @@ const password = "Disposable-only-Password-123!";
 const origin = "http://localhost";
 /** $0.02 per query request for the simulated metered source. */
 export const fixturePrices: SourcePrices = { "fixture-metered": 20_000 };
+export const fixtureSettings: SourceSettings = {
+	prices: fixturePrices,
+	quotas: {},
+	fixtureSources: true,
+};
 
 /** No sockets, production environment files, real mail, or fallback to DATABASE_URL. */
 export async function createTestWorkspace() {
@@ -90,7 +98,7 @@ export async function createTestWorkspace() {
 		const mail: AuthMail[] = [];
 		const createAuthApp = (
 			env: Partial<AuthConfig> = {},
-			sourcePrices = fixturePrices,
+			sourceSettings = fixtureSettings,
 		) =>
 			createApp({
 				db,
@@ -108,7 +116,7 @@ export async function createTestWorkspace() {
 				),
 				corsOrigin: env.CORS_ORIGIN ?? origin,
 				jobQueue,
-				sourcePrices,
+				sourceSettings,
 			});
 		const app = createAuthApp();
 		const post = (path: string, body: unknown) =>
@@ -161,6 +169,7 @@ export async function createTestWorkspace() {
 				await createLiteratureJobHandler({
 					db,
 					prices: fixturePrices,
+					fixtureSources: true,
 					sleep: async () => undefined,
 					...options,
 				})(jobs);

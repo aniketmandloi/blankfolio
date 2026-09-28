@@ -13,7 +13,7 @@ export async function createContext({
 		db: services.db,
 		projectCleanup: services.projectCleanup,
 		jobQueue: services.jobQueue,
-		sourcePrices: services.sourcePrices,
+		sourceSettings: services.sourceSettings,
 		session: await services.auth.api.getSession({
 			headers: context.req.raw.headers,
 		}),

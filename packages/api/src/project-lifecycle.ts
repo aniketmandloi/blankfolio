@@ -3,6 +3,7 @@ import {
 	literatureScopeRevision,
 	literatureSnapshot,
 	researchJob,
+	sourceResponseCache,
 	usageReservation,
 } from "@blankfolio/db/schema/literature";
 import { briefRevision, researchProject } from "@blankfolio/db/schema/projects";
@@ -66,6 +67,9 @@ export function createProjectCleanupRegistry(
 				await tx
 					.delete(literatureScopeRevision)
 					.where(eq(literatureScopeRevision.projectId, id));
+				await tx
+					.delete(sourceResponseCache)
+					.where(eq(sourceResponseCache.projectId, id));
 			},
 		},
 		...additional,

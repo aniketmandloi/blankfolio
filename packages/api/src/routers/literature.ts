@@ -16,7 +16,14 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { researchProcedure, router } from "../index";
-import { literatureSources, type SourcePrices } from "../literature-sources";
+import {
+	literatureSources,
+	maxChargeMicros,
+	recordAliases,
+	type SourceSettings,
+	sourceAllocation,
+	sourceAvailability,
+} from "../literature-sources";
 import { requireProject } from "../project-lifecycle";
 import { activeRunsPerAccount } from "../research-jobs";
 import { budgetStatus } from "../usage-budget";
@@ -58,14 +65,24 @@ export const scopeSchema = z
 	});
 
 /** Deterministic templates from the brief's topic and title only; no other brief field. */
-export function proposeScope(brief: ResearchBrief, now: Date): LiteratureScope {
+export function proposeScope(
+	brief: ResearchBrief,
+	now: Date,
+	settings: SourceSettings,
+): LiteratureScope {
 	const from = new Date(now);
 	from.setUTCFullYear(from.getUTCFullYear() - 5);
 	return {
 		queries: [
 			...new Set([brief.topic.trim(), brief.title.trim()].filter(Boolean)),
 		].map((query) => query.slice(0, 2_000)),
-		sources: ["fixture-catalog"],
+		sources: [
+			settings.fixtureSources &&
+			(!literatureSources.openalex ||
+				sourceAvailability(literatureSources.openalex, settings).blockedBy)
+				? "fixture-catalog"
+				: "openalex",
+		],
 		dateFrom: from.toISOString().slice(0, 10),
 		dateTo: now.toISOString().slice(0, 10),
 		inclusionCriteria: "",
@@ -74,15 +91,29 @@ export function proposeScope(brief: ResearchBrief, now: Date): LiteratureScope {
 	};
 }
 
-function sourceCatalog(prices: SourcePrices) {
-	return Object.values(literatureSources).map((source) => ({
+/** Sources this deployment offers; disabled fixture sources are not even listed. */
+const offered = (settings: SourceSettings) =>
+	Object.values(literatureSources).filter(
+		(source) => !source.fixture || settings.fixtureSources,
+	);
+function sourceCatalog(settings: SourceSettings) {
+	return offered(settings).map((source) => ({
 		id: source.id,
 		label: source.label,
-		metered: source.metered,
-		priceMicrosPerQuery: prices[source.id] ?? null,
-		priced: !source.metered || prices[source.id] !== undefined,
+		metered: source.routes.length > 0,
+		routes: source.routes.map((route) => ({
+			id: route,
+			priceMicros: settings.prices[route] ?? null,
+		})),
+		dailyQuotaMicros: settings.quotas[source.id] ?? null,
+		unavailable: sourceAvailability(source, settings).blockedBy,
 	}));
 }
+const unavailableText = {
+	"fixtures-disabled": "fixture sources are not enabled here",
+	"pricing-unknown": "its pricing is not configured",
+	"quota-unknown": "its daily quota is not configured",
+};
 
 async function latestScope(db: Database | Transaction, projectId: string) {
 	const [saved] = await db
@@ -110,7 +141,7 @@ async function latestBrief(db: Database | Transaction, projectId: string) {
 async function scopeView(
 	db: Database | Transaction,
 	projectId: string,
-	prices: SourcePrices,
+	settings: SourceSettings,
 ) {
 	const saved = await latestScope(db, projectId);
 	const brief = await latestBrief(db, projectId);
@@ -118,8 +149,8 @@ async function scopeView(
 		revision: saved?.revision ?? 0,
 		briefRevision: saved?.briefRevision ?? brief.revision,
 		proposed: !saved,
-		scope: saved?.scope ?? proposeScope(brief.brief, new Date()),
-		sources: sourceCatalog(prices),
+		scope: saved?.scope ?? proposeScope(brief.brief, new Date(), settings),
+		sources: sourceCatalog(settings),
 	};
 }
 
@@ -192,7 +223,7 @@ export const literatureRouter = router({
 	scope: researchProcedure.input(projectRef).query(({ ctx, input }) =>
 		ctx.db.transaction(async (tx) => {
 			await requireProject(tx, ctx.session.user.id, input.projectId);
-			return scopeView(tx, input.projectId, ctx.sourcePrices);
+			return scopeView(tx, input.projectId, ctx.sourceSettings);
 		}, readOnly),
 	),
 	saveScope: researchProcedure
@@ -210,6 +241,15 @@ export const literatureRouter = router({
 					input.projectId,
 					"write",
 				);
+				const available = new Set(
+					offered(ctx.sourceSettings).map((source) => source.id),
+				);
+				if (input.scope.sources.some((id) => !available.has(id)))
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message:
+							"A selected source is not available here. Choose from the listed sources.",
+					});
 				const revision =
 					(await latestScope(tx, input.projectId))?.revision ?? 0;
 				if (revision !== input.expectedRevision)
@@ -225,7 +265,7 @@ export const literatureRouter = router({
 					briefRevision: project.revision,
 					scope: input.scope,
 				});
-				return scopeView(tx, input.projectId, ctx.sourcePrices);
+				return scopeView(tx, input.projectId, ctx.sourceSettings);
 			}),
 		),
 	submitSearch: researchProcedure
@@ -287,14 +327,27 @@ export const literatureRouter = router({
 				const budget = await budgetStatus(tx, input.projectId, new Date());
 				for (const id of saved.scope.sources) {
 					const source = literatureSources[id];
-					if (!source?.metered) continue;
-					const price = ctx.sourcePrices[id];
-					if (price === undefined)
+					if (!source) continue;
+					const { blockedBy, routes } = sourceAvailability(
+						source,
+						ctx.sourceSettings,
+					);
+					if (blockedBy)
 						throw new TRPCError({
 							code: "PRECONDITION_FAILED",
-							message: `${source.label} is disabled because its pricing is not configured. Remove it from the scope or use free sources.`,
+							message: `${source.label} is disabled because ${unavailableText[blockedBy]}. Remove it from the scope or use other sources.`,
 						});
-					if (budget.exceeds(price * saved.scope.queries.length))
+					const charge = maxChargeMicros(
+						source,
+						{
+							queries: saved.scope.queries,
+							limit: sourceAllocation(saved.scope.sources.length),
+							includeFoundations: saved.scope.includeFoundations,
+							routes,
+						},
+						ctx.sourceSettings.prices,
+					);
+					if (charge && budget.exceeds(charge))
 						throw new TRPCError({
 							code: "PRECONDITION_FAILED",
 							message: `The spending limit does not allow ${source.label} now. Remove it from the scope or use free sources.`,
@@ -450,7 +503,7 @@ export const literatureRouter = router({
 						code: "NOT_FOUND",
 						message: "Literature Snapshot not found",
 					});
-				const papers = await tx
+				const rows = await tx
 					.select({
 						id: paper.id,
 						title: paper.title,
@@ -460,11 +513,38 @@ export const literatureRouter = router({
 						url: paper.url,
 						source: snapshotPaper.source,
 						acquisitionReason: snapshotPaper.acquisitionReason,
+						observation: snapshotPaper.observation,
 					})
 					.from(snapshotPaper)
 					.innerJoin(paper, eq(paper.id, snapshotPaper.paperId))
 					.where(eq(snapshotPaper.snapshotId, input.snapshotId))
 					.orderBy(asc(snapshotPaper.rank));
+				// A snapshot shows what its source observed, not later corrections to the paper.
+				const papers = rows.map(({ observation, ...row }) => {
+					const seen = observation ?? { ...row, key: "" };
+					return {
+						id: row.id,
+						source: row.source,
+						acquisitionReason: row.acquisitionReason,
+						title: seen.title,
+						authors: seen.authors,
+						year: seen.year,
+						doi: seen.doi,
+						url: seen.url,
+						identifiers: observation
+							? recordAliases(observation).filter(
+									(alias) => !alias.startsWith("fixture:"),
+								)
+							: row.doi
+								? [`doi:${row.doi.toLowerCase()}`]
+								: [],
+						publicationDate: observation?.publicationDate ?? null,
+						preprint: observation?.preprint ?? null,
+						workType: observation?.workType ?? null,
+						abstractAvailable: observation?.abstractAvailable ?? false,
+						sourceUpdatedAt: observation?.sourceUpdatedAt ?? null,
+					};
+				});
 				return {
 					...snapshot.snapshot,
 					scope: snapshot.scope,
@@ -481,14 +561,27 @@ export const literatureRouter = router({
 				period: budget.period,
 				limits: budget.limits,
 				projectCommittedMicros: budget.projectCommittedMicros,
-				sources: sourceCatalog(ctx.sourcePrices).map((source) => ({
-					...source,
-					blockedBy: !source.metered
-						? null
-						: source.priceMicrosPerQuery === null
-							? ("pricing-unknown" as const)
-							: budget.exceeds(source.priceMicrosPerQuery),
-				})),
+				sources: sourceCatalog(ctx.sourceSettings).map((entry) => {
+					const source = literatureSources[entry.id];
+					const charge = source
+						? maxChargeMicros(
+								source,
+								{
+									queries: ["one query"],
+									limit: sourceAllocation(1),
+									includeFoundations: true,
+									routes: sourceAvailability(source, ctx.sourceSettings).routes,
+								},
+								ctx.sourceSettings.prices,
+							)
+						: 0;
+					return {
+						...entry,
+						/** Whether a one-query search on this source alone is blocked now. */
+						blockedBy:
+							entry.unavailable ?? (charge ? budget.exceeds(charge) : null),
+					};
+				}),
 			};
 		}, readOnly),
 	),

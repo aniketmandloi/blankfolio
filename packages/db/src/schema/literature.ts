@@ -104,6 +104,12 @@ export const researchJob = pgTable(
 );
 
 export type SourceOutcome = "succeeded" | "empty" | "partial" | "failed";
+/** Older work arrives as `foundation` (fixtures), `citation` (cited by discovery results) or `direct-lookup`. */
+export type AcquisitionReason =
+	| "discovery"
+	| "foundation"
+	| "citation"
+	| "direct-lookup";
 export type SourceRecord = {
 	key: string;
 	title: string;
@@ -111,7 +117,16 @@ export type SourceRecord = {
 	year: number;
 	doi: string | null;
 	url: string | null;
-	acquisitionReason: "discovery" | "foundation";
+	acquisitionReason: AcquisitionReason;
+	/** Exact stable identifiers (`doi:…`, `openalex:W…`, `arxiv:…`, `pmid:…`) that reconcile papers. */
+	identifiers?: string[];
+	publicationDate?: string | null;
+	/** `null` when the source does not say whether this copy is a preprint. */
+	preprint?: boolean | null;
+	workType?: string | null;
+	abstractAvailable?: boolean;
+	/** When the provider last changed its record. */
+	sourceUpdatedAt?: string | null;
 };
 /** One source's checkpoint within a job; completed rows are never re-executed. */
 export const sourceExecution = pgTable(
@@ -156,6 +171,15 @@ export const sourceExecution = pgTable(
 	],
 );
 
+export type SnapshotAllocations = {
+	/** Records held back from the cap for the later arXiv and status stages. */
+	reserved: number;
+	sources: {
+		source: string;
+		allocation: number;
+		kept: Partial<Record<AcquisitionReason, number>>;
+	}[];
+};
 /** Immutable once published; a further search creates another snapshot. */
 export const literatureSnapshot = pgTable(
 	"literature_snapshot",
@@ -173,6 +197,7 @@ export const literatureSnapshot = pgTable(
 		coverage: text("coverage").$type<"all-sources" | "partial">().notNull(),
 		recordCap: integer("record_cap").notNull(),
 		paperCount: integer("paper_count").notNull(),
+		allocations: jsonb("allocations").$type<SnapshotAllocations>(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -199,6 +224,21 @@ export const paper = pgTable("paper", {
 		.defaultNow(),
 });
 
+/** Exact identifiers owned by one paper; a conflicting identifier never moves or merges papers. */
+export const paperAlias = pgTable(
+	"paper_alias",
+	{
+		alias: text("alias").primaryKey(),
+		paperId: text("paper_id")
+			.notNull()
+			.references(() => paper.id),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [index("paper_alias_paper_idx").on(table.paperId)],
+);
+
 export const snapshotPaper = pgTable(
 	"snapshot_paper",
 	{
@@ -214,8 +254,10 @@ export const snapshotPaper = pgTable(
 		source: text("source").notNull(),
 		rank: integer("rank").notNull(),
 		acquisitionReason: text("acquisition_reason")
-			.$type<"discovery" | "foundation">()
+			.$type<AcquisitionReason>()
 			.notNull(),
+		/** The record exactly as this source returned it; later observations never rewrite it. */
+		observation: jsonb("observation").$type<SourceRecord>(),
 	},
 	(table) => [primaryKey({ columns: [table.snapshotId, table.paperId] })],
 );
@@ -260,4 +302,28 @@ export const usageReservation = pgTable(
 			sql`${table.state} in ('pending', 'settled', 'held')`,
 		),
 	],
+);
+
+/** Provider-directed pauses shared by every worker, e.g. after a rate-limit answer. */
+export const sourceThrottle = pgTable("source_throttle", {
+	source: text("source").primaryKey(),
+	pausedUntil: timestamp("paused_until", { withTimezone: true }).notNull(),
+});
+
+/**
+ * Provider responses whose terms allow caching, scoped to a project because their keys derive
+ * from private queries; project cleanup removes them.
+ */
+export const sourceResponseCache = pgTable(
+	"source_response_cache",
+	{
+		projectId: text("project_id")
+			.notNull()
+			.references(() => researchProject.id, { onDelete: "cascade" }),
+		key: text("key").notNull(),
+		source: text("source").notNull(),
+		body: jsonb("body").notNull(),
+		fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [primaryKey({ columns: [table.projectId, table.key] })],
 );

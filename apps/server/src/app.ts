@@ -1,4 +1,4 @@
-import type { SourcePrices } from "@blankfolio/api/literature-sources";
+import type { SourceSettings } from "@blankfolio/api/literature-sources";
 import {
 	createProjectCleanupRegistry,
 	type ProjectCleanupRegistry,
@@ -23,7 +23,7 @@ export type ApplicationServices = {
 	};
 	corsOrigin: string;
 	jobQueue: JobQueue;
-	sourcePrices: SourcePrices;
+	sourceSettings: SourceSettings;
 	projectCleanup?: ProjectCleanupRegistry;
 };
 /** Importable request application: no sockets, environment loading, or global services. */
