@@ -528,6 +528,9 @@ scenario(
 							version: 2,
 							comment: "This paper has been withdrawn by the author",
 						}),
+						arxivEntry("2401.00010", {
+							comment: "12 pages; extends a withdrawn workshop version",
+						}),
 					]),
 				);
 			const doi = decodeURIComponent(url.pathname.replace("/works/", ""));
@@ -672,6 +675,14 @@ scenario(
 					date: "2024-08-09",
 				},
 			],
+		});
+
+		// Mentioning an earlier withdrawal does not make this version withdrawn.
+		expect(status(first, byArxiv("2401.00010"))).toMatchObject({
+			state: "unknown",
+			positiveSupport: "allowed",
+			check: "not-covered",
+			updates: [],
 		});
 
 		// Within a day the same statuses are reused without asking Crossref again.

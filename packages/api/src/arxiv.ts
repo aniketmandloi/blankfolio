@@ -163,6 +163,13 @@ function parseFeed(xml: string): Page | null {
 	return { total, entries };
 }
 
+/**
+ * arXiv has no status field; a withdrawn version's comment opens by saying so, e.g. "This paper
+ * has been withdrawn by the author". A comment that merely mentions a withdrawal does not count.
+ */
+const withdrawalComment =
+	/^\s*(?:this\s+(?:paper|article|submission|manuscript|preprint|version)\s+(?:has\s+been|is|was)\s+)?withdrawn\b/i;
+
 function toRecord(
 	entry: Page["entries"][number],
 	acquisitionReason: AcquisitionReason,
@@ -194,8 +201,7 @@ function toRecord(
 					},
 				]
 			: [],
-		// arXiv has no status field; a withdrawn version says so in its comment.
-		updates: /\bwithdrawn\b/i.test(entry.comment ?? "")
+		updates: withdrawalComment.test(entry.comment ?? "")
 			? [
 					{
 						type: "withdrawal",
