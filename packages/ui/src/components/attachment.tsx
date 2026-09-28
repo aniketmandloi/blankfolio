@@ -199,12 +199,12 @@ function AttachmentGroup({ className, ...props }: React.ComponentProps<"div">) {
 
 export {
 	Attachment,
+	AttachmentAction,
+	AttachmentActions,
+	AttachmentContent,
+	AttachmentDescription,
 	AttachmentGroup,
 	AttachmentMedia,
-	AttachmentContent,
 	AttachmentTitle,
-	AttachmentDescription,
-	AttachmentActions,
-	AttachmentAction,
 	AttachmentTrigger,
 };
