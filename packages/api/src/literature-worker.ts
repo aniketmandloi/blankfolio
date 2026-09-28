@@ -668,7 +668,14 @@ export async function runLiteratureWorker(
 	options: LiteratureWorkerOptions,
 	pollingIntervalSeconds: number,
 ) {
-	const boss = new PgBoss({ connectionString, max: 3, migrate: false });
+	const boss = new PgBoss({
+		connectionString,
+		max: 3,
+		migrate: false,
+		// No cron schedules or job flows exist, yet their pollers would query every five seconds.
+		schedule: false,
+		flowIntervalSeconds: 60 * 60,
+	});
 	boss.on("error", (error) => console.error("job_queue_error", error.message));
 	await boss.start();
 	await startLiteratureWorker(boss, options, pollingIntervalSeconds);
