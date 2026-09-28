@@ -81,8 +81,11 @@ commit=$(as_user git -C "$app" rev-parse --verify --quiet "origin/$ref^{commit}"
 as_user git -C "$app" checkout --quiet --detach "$commit"
 echo "Deploying $ref: $(as_user git -C "$app" log -1 --format='%h %s')"
 
-as_user pnpm --dir "$app" install --frozen-lockfile --filter 'worker...'
-as_user pnpm --dir "$app" --filter worker build
+# Corepack picks the pnpm version from the package.json in the working directory, not --dir.
+cd "$app"
+as_user pnpm install --frozen-lockfile --filter 'worker...'
+as_user pnpm --filter worker build
+cd /
 
 if [ "$migrate" = 1 ]; then
 	echo "Installing or upgrading the pg-boss schema"
