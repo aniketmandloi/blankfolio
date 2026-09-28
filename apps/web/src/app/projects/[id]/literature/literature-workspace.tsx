@@ -18,6 +18,8 @@ type Scope = ScopeView["scope"];
 type Job = Outputs["jobs"]["items"][number];
 type SourceOutcome = Outputs["snapshot"]["sources"][number];
 type CatalogSource = ScopeView["sources"][number];
+type Snapshot = Outputs["snapshot"];
+type Paper = Snapshot["papers"][number];
 
 const activeStates: Job["state"][] = ["queued", "running"];
 const pollMilliseconds = 5_000;
@@ -47,7 +49,78 @@ const errorText: Record<string, string> = {
 	"pricing-unknown": "Disabled because pricing is not configured.",
 	"source-disabled": "This source is no longer enabled.",
 	"query-failed": "At least one query failed at this source.",
+	"quota-unknown":
+		"Disabled because its daily provider quota is not configured.",
+	"quota-exhausted":
+		"Skipped: the deployment's daily quota for this provider is used up. It resets at midnight UTC.",
+	"rate-limited":
+		"The provider asked us to wait longer than a search can, so it was not searched or stopped early.",
+	timeout:
+		"A request timed out, so the search stopped there. Its possible cost stays counted.",
+	"source-error":
+		"The provider returned a server error, so the search stopped there.",
+	"request-rejected": "The provider rejected the request.",
+	"invalid-response": "The provider sent an answer that could not be read.",
+	"credentials-missing":
+		"Not searched: the worker has no credentials for this provider.",
+	"stale-cache":
+		"The provider failed, so some results come from an older cached answer (age shown above).",
 };
+const reasonText: Record<Paper["acquisitionReason"], string> = {
+	discovery: "",
+	foundation: "Older foundational work",
+	citation: "Older work cited by the top results",
+	"direct-lookup": "Looked up by identifier",
+};
+/** Cached answers older than a day are only served when the provider fails. */
+const freshCacheSeconds = 24 * 60 * 60;
+const identifierLinks: Record<string, (id: string) => string> = {
+	doi: (id) => `https://doi.org/${id}`,
+	openalex: (id) => `https://openalex.org/${id}`,
+	arxiv: (id) => `https://arxiv.org/abs/${id}`,
+	pmid: (id) => `https://pubmed.ncbi.nlm.nih.gov/${id}/`,
+};
+function Identifier({ value }: { value: string }) {
+	const [scheme = "", ...rest] = value.split(":");
+	const link = identifierLinks[scheme];
+	return link ? (
+		<a className="text-link" href={link(rest.join(":"))} rel="noreferrer">
+			{value}
+		</a>
+	) : (
+		<span>{value}</span>
+	);
+}
+function paperStatus(paper: Paper) {
+	return [
+		paper.preprint === true
+			? "Preprint"
+			: paper.preprint === false
+				? "Published version"
+				: "Publication status not supplied",
+		paper.abstractAvailable
+			? "Abstract available at the source (not stored)"
+			: "Metadata only",
+		reasonText[paper.acquisitionReason],
+		paper.sourceUpdatedAt
+			? `Provider record updated ${paper.sourceUpdatedAt.slice(0, 10)}`
+			: "",
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+function allocationText(snapshot: Snapshot) {
+	if (!snapshot.allocations) return "";
+	const kept = snapshot.allocations.sources.map((entry) => {
+		const label =
+			snapshot.sources.find((s) => s.source === entry.source)?.label ??
+			entry.source;
+		const total = Object.values(entry.kept).reduce((n, c) => n + (c ?? 0), 0);
+		const older = total - (entry.kept.discovery ?? 0);
+		return `${label} contributed ${total} of its ${entry.allocation}${older ? ` (${older} older or looked-up works)` : ""}`;
+	});
+	return ` ${kept.join("; ")}. ${snapshot.allocations.reserved} records are reserved for later arXiv and status checks.`;
+}
 const outcomeText: Record<SourceOutcome["status"], string> = {
 	pending: "Waiting",
 	running: "Searching",
@@ -113,7 +186,11 @@ function OutcomeDetails({ outcome }: { outcome: SourceOutcome }) {
 				<span className="outcome-status">
 					{outcomeText[outcome.status]}
 					{outcome.truncated ? " · truncated" : ""}
-					{outcome.cacheAgeSeconds !== null ? " · cached" : ""}
+					{outcome.cacheAgeSeconds === null
+						? ""
+						: outcome.cacheAgeSeconds > freshCacheSeconds
+							? " · stale cache"
+							: " · cached"}
 				</span>
 			</summary>
 			<dl className="revision-fields">
@@ -143,6 +220,15 @@ function OutcomeDetails({ outcome }: { outcome: SourceOutcome }) {
 						<dd>
 							Served from a cache about{" "}
 							{Math.round(outcome.cacheAgeSeconds / 3600)} hours old.
+						</dd>
+					</div>
+				)}
+				{outcome.cursor && (
+					<div>
+						<dt>More results</dt>
+						<dd>
+							The source reported more matches; this search stopped at its
+							allocation or a failure and kept the provider's cursor.
 						</dd>
 					</div>
 				)}
@@ -200,6 +286,7 @@ function SnapshotView({
 					? ", plus older foundational work where supported."
 					: "."}{" "}
 				{snapshot.paperCount} of at most {snapshot.recordCap} records kept.
+				{allocationText(snapshot)}
 			</p>
 			<div className="history-list">
 				{snapshot.sources.map((outcome) => (
@@ -217,14 +304,26 @@ function SnapshotView({
 						<li key={paper.id}>
 							<p className="paper-title">{paper.title}</p>
 							<p className="field-caption">
-								{paper.authors.join(", ")} · {paper.year}
-								{paper.doi ? ` · doi:${paper.doi}` : ""} · found by{" "}
+								{paper.authors.join(", ") || "Authors not supplied"} ·{" "}
+								{paper.publicationDate ?? paper.year} · found by{" "}
 								{snapshot.sources.find((s) => s.source === paper.source)
 									?.label ?? paper.source}
-								{paper.acquisitionReason === "foundation"
-									? " · older foundational work"
-									: ""}
 							</p>
+							<p className="field-caption">{paperStatus(paper)}</p>
+							{(paper.identifiers.length > 0 || paper.url) && (
+								<p className="field-caption">
+									{paper.identifiers.map((identifier) => (
+										<span key={identifier}>
+											<Identifier value={identifier} />{" "}
+										</span>
+									))}
+									{paper.url && /^https?:\/\//.test(paper.url) && (
+										<a className="text-link" href={paper.url} rel="noreferrer">
+											Source page
+										</a>
+									)}
+								</p>
+							)}
 						</li>
 					))}
 				</ol>
