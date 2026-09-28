@@ -640,6 +640,7 @@ scenario(
 		expect(await proposedSources(withoutQuota)).toEqual(["fixture-catalog"]);
 		expect(await proposedSources(researcherFor(workspace, cookie))).toEqual([
 			"openalex",
+			"arxiv",
 		]);
 
 		const unconfigured = await projectWithScope(withoutQuota, {
@@ -758,7 +759,7 @@ scenario(
 		});
 		const { id } = await deployed.projects.create.mutate({ title: "Deployed" });
 		const proposed = await deployed.literature.scope.query({ projectId: id });
-		expect(proposed.scope.sources).toEqual(["openalex"]);
+		expect(proposed.scope.sources).toEqual(["openalex", "arxiv"]);
 		expect(proposed.sources.map((source) => source.id)).toEqual([
 			"openalex",
 			"arxiv",
