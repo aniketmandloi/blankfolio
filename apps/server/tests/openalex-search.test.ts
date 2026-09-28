@@ -606,6 +606,19 @@ scenario(
 		});
 		expect(stale.snapshot?.coverage).toBe("partial");
 		expect(worker.calls).toHaveLength(calls + 4);
+
+		// Past the retention window the cached page is never served, even as stale.
+		worker.advance(5 * 24 * 60 * 60);
+		const expired = await run(["calibration"]);
+		expect(expired.job).toMatchObject({
+			state: "failed",
+			errorClass: "all-sources-failed",
+			snapshotId: null,
+		});
+		expect(expired.openalex).toMatchObject({
+			status: "failed",
+			errorClass: "source-unavailable",
+		});
 	},
 );
 

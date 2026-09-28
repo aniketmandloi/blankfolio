@@ -16,7 +16,7 @@ import {
 } from "@blankfolio/db/schema/literature";
 import { researchProject } from "@blankfolio/db/schema/projects";
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray, lt, notInArray, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
 import { type JobWithMetadata, PgBoss } from "pg-boss";
 import {
 	type LiteratureSource,
@@ -212,6 +212,12 @@ export function createLiteratureWorker({
 						and(
 							eq(sourceResponseCache.projectId, projectId),
 							eq(sourceResponseCache.key, keyOf(key)),
+							gte(
+								sourceResponseCache.fetchedAt,
+								new Date(
+									now().getTime() - responseCacheRetentionSeconds * 1000,
+								),
+							),
 						),
 					);
 				return hit ?? null;
