@@ -613,6 +613,17 @@ scenario(
 			prices: openAlexSettings.prices,
 			quotas: {},
 		});
+		const fresh = await withoutQuota.projects.create.mutate({
+			title: "Proposal",
+		});
+		const proposedSources = async (researcher: Researcher) =>
+			(await researcher.literature.scope.query({ projectId: fresh.id })).scope
+				.sources;
+		expect(await proposedSources(withoutQuota)).toEqual(["fixture-catalog"]);
+		expect(await proposedSources(researcherFor(workspace, cookie))).toEqual([
+			"openalex",
+		]);
+
 		const unconfigured = await projectWithScope(withoutQuota, {
 			queries: ["calibration"],
 		});

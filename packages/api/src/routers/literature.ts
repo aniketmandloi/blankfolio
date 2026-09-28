@@ -65,14 +65,23 @@ export const scopeSchema = z
 	});
 
 /** Deterministic templates from the brief's topic and title only; no other brief field. */
-export function proposeScope(brief: ResearchBrief, now: Date): LiteratureScope {
+export function proposeScope(
+	brief: ResearchBrief,
+	now: Date,
+	settings: SourceSettings,
+): LiteratureScope {
 	const from = new Date(now);
 	from.setUTCFullYear(from.getUTCFullYear() - 5);
 	return {
 		queries: [
 			...new Set([brief.topic.trim(), brief.title.trim()].filter(Boolean)),
 		].map((query) => query.slice(0, 2_000)),
-		sources: ["fixture-catalog"],
+		sources: [
+			literatureSources.openalex &&
+			!sourceAvailability(literatureSources.openalex, settings).blockedBy
+				? "openalex"
+				: "fixture-catalog",
+		],
 		dateFrom: from.toISOString().slice(0, 10),
 		dateTo: now.toISOString().slice(0, 10),
 		inclusionCriteria: "",
@@ -133,7 +142,7 @@ async function scopeView(
 		revision: saved?.revision ?? 0,
 		briefRevision: saved?.briefRevision ?? brief.revision,
 		proposed: !saved,
-		scope: saved?.scope ?? proposeScope(brief.brief, new Date()),
+		scope: saved?.scope ?? proposeScope(brief.brief, new Date(), settings),
 		sources: sourceCatalog(settings),
 	};
 }
