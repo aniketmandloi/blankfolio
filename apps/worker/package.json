@@ -8,6 +8,8 @@
 		"start": "node dist/start.mjs",
 		"queue:migrate": "tsx src/migrate.ts",
 		"openalex:smoke": "tsx src/openalex-smoke.ts",
+		"arxiv:smoke": "tsx src/arxiv-smoke.ts",
+		"crossref:smoke": "tsx src/crossref-smoke.ts",
 		"env:generate": "varlock codegen"
 	},
 	"dependencies": {
