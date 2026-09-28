@@ -43,6 +43,8 @@ const errorText: Record<string, string> = {
 		"Every selected source failed, so no Literature Snapshot was created. This says nothing about gaps in the literature.",
 	"worker-error":
 		"The search stopped after repeated worker errors. Completed source results were kept.",
+	abandoned:
+		"The search stopped responding and the queue gave up on it, so no Literature Snapshot was created. Any cost it may have incurred stays counted.",
 	"source-unavailable": "Unavailable after three attempts.",
 	"uncertain-outcome":
 		"The source may have processed a billed request but no answer arrived. Its reserved cost stays counted and it was not retried automatically.",

@@ -1,5 +1,8 @@
 import type { Database, Transaction } from "@blankfolio/db";
-import { researchJob } from "@blankfolio/db/schema/literature";
+import {
+	researchJob,
+	usageReservation,
+} from "@blankfolio/db/schema/literature";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { fromDrizzle, PgBoss } from "pg-boss";
 
@@ -100,4 +103,58 @@ export async function cancelActiveJobs(
 				inArray(researchJob.state, ["queued", "running"]),
 			),
 		);
+}
+
+const liveQueueStates = ["created", "retry", "active"];
+/**
+ * Fails searches the queue gave up on (exhausted, expired or deleted entries) without the handler
+ * finishing them, freeing their account slots. A job with a live queue entry is never touched.
+ * Pending reservations are held, since an abandoned attempt may have been billed.
+ */
+export async function reconcileAbandonedSearches(db: Database, boss: PgBoss) {
+	// Jobs first: a job commits with its queue entry, so a job seen here has an entry to find.
+	const active = await db
+		.select({ id: researchJob.id })
+		.from(researchJob)
+		.where(inArray(researchJob.state, ["queued", "running"]));
+	const abandoned: string[] = [];
+	for (const { id } of active) {
+		const entries = await boss.findJobs(literatureSearchQueue, {
+			data: { jobId: id },
+		});
+		if (!entries.some((entry) => liveQueueStates.includes(entry.state)))
+			abandoned.push(id);
+	}
+	if (!abandoned.length) return [];
+	return db.transaction(async (tx) => {
+		const failed = (
+			await tx
+				.update(researchJob)
+				.set({
+					state: "failed",
+					stage: "done",
+					errorClass: "abandoned",
+					finishedAt: new Date(),
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						inArray(researchJob.id, abandoned),
+						inArray(researchJob.state, ["queued", "running"]),
+					),
+				)
+				.returning({ id: researchJob.id })
+		).map((job) => job.id);
+		if (failed.length)
+			await tx
+				.update(usageReservation)
+				.set({ state: "held" })
+				.where(
+					and(
+						inArray(usageReservation.jobId, failed),
+						eq(usageReservation.state, "pending"),
+					),
+				);
+		return failed;
+	});
 }
