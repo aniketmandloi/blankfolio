@@ -194,6 +194,18 @@ function toRecord(
 					},
 				]
 			: [],
+		// arXiv has no status field; a withdrawn version says so in its comment.
+		updates: /\bwithdrawn\b/i.test(entry.comment ?? "")
+			? [
+					{
+						type: "withdrawal",
+						label: "Withdrawn, according to the arXiv comment",
+						source: "arxiv",
+						notice: `arxiv:${entry.id}v${entry.version}`,
+						date: entry.updated?.slice(0, 10) ?? null,
+					},
+				]
+			: [],
 	};
 }
 

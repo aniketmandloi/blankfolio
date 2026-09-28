@@ -132,6 +132,18 @@ export type SourceRecord = {
 	versionDate?: string | null;
 	/** Other manifestations of the work the provider names; they stay separate papers. */
 	relatedVersions?: RelatedVersion[];
+	/** Updates the provider itself reports, such as an arXiv withdrawal comment. */
+	updates?: PublicationUpdate[];
+};
+/** A correction, retraction, withdrawal or similar notice about a work. */
+export type PublicationUpdate = {
+	type: string;
+	label: string;
+	/** Who reported it, e.g. `publisher`, `retraction-watch` or `arxiv`. */
+	source: string;
+	/** The notice itself, e.g. `doi:…`. */
+	notice: string | null;
+	date: string | null;
 };
 export type SourceObservation = { source: string; record: SourceRecord };
 export type RelatedVersion = {
