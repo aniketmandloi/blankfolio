@@ -945,6 +945,16 @@ summary:focus-visible {
 	overflow-wrap: anywhere;
 }
 
+.paper-status[data-support="disallowed"] {
+	color: var(--destructive);
+	font-weight: 500;
+}
+
+.paper-status[data-support="review"] {
+	color: var(--foreground);
+	font-weight: 500;
+}
+
 .paper-empty {
 	padding: 0.75rem 0;
 }

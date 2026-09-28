@@ -1,0 +1,1 @@
+ALTER TABLE "snapshot_paper" ADD COLUMN "also_observed" jsonb DEFAULT '[]' NOT NULL;

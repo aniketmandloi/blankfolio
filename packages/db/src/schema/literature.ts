@@ -72,7 +72,7 @@ export const researchJob = pgTable(
 		input: jsonb("input").$type<LiteratureSearchInput>().notNull(),
 		state: text("state").$type<ResearchJobState>().notNull().default("queued"),
 		stage: text("stage")
-			.$type<"waiting" | "retrieving" | "publishing" | "done">()
+			.$type<"waiting" | "retrieving" | "reconciling" | "publishing" | "done">()
 			.notNull()
 			.default("waiting"),
 		cancelReason: text("cancel_reason").$type<
@@ -127,6 +127,29 @@ export type SourceRecord = {
 	abstractAvailable?: boolean;
 	/** When the provider last changed its record. */
 	sourceUpdatedAt?: string | null;
+	/** The provider's version of this copy, e.g. arXiv `v2`, and the date that version appeared. */
+	version?: string | null;
+	versionDate?: string | null;
+	/** Other manifestations of the work the provider names; they stay separate papers. */
+	relatedVersions?: RelatedVersion[];
+	/** Updates the provider itself reports, such as an arXiv withdrawal comment. */
+	updates?: PublicationUpdate[];
+};
+/** A correction, retraction, withdrawal or similar notice about a work. */
+export type PublicationUpdate = {
+	type: string;
+	label: string;
+	/** Who reported it, e.g. `publisher`, `retraction-watch` or `arxiv`. */
+	source: string;
+	/** The notice itself, e.g. `doi:…`. */
+	notice: string | null;
+	date: string | null;
+};
+export type SourceObservation = { source: string; record: SourceRecord };
+export type RelatedVersion = {
+	identifier: string;
+	relation: "published-version" | "preprint";
+	note?: string | null;
 };
 /** One source's checkpoint within a job; completed rows are never re-executed. */
 export const sourceExecution = pgTable(
@@ -180,6 +203,17 @@ export type SnapshotAllocations = {
 		kept: Partial<Record<AcquisitionReason, number>>;
 	}[];
 };
+/** How far publication-status reconciliation got for this snapshot's DOIs. */
+export type SnapshotStatusCheck = {
+	source: string;
+	outcome: "complete" | "partial" | "failed" | "not-run";
+	checked: number;
+	notRegistered: number;
+	/** DOIs the source covers whose status could not be checked. */
+	unknown: number;
+	errorClass: string | null;
+	checkedAt: string;
+};
 /** Immutable once published; a further search creates another snapshot. */
 export const literatureSnapshot = pgTable(
 	"literature_snapshot",
@@ -198,6 +232,7 @@ export const literatureSnapshot = pgTable(
 		recordCap: integer("record_cap").notNull(),
 		paperCount: integer("paper_count").notNull(),
 		allocations: jsonb("allocations").$type<SnapshotAllocations>(),
+		statusCheck: jsonb("status_check").$type<SnapshotStatusCheck>(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -258,8 +293,100 @@ export const snapshotPaper = pgTable(
 			.notNull(),
 		/** The record exactly as this source returned it; later observations never rewrite it. */
 		observation: jsonb("observation").$type<SourceRecord>(),
+		/** The same paper as other sources in this run returned it, reconciled by exact identifier. */
+		alsoObserved: jsonb("also_observed")
+			.$type<SourceObservation[]>()
+			.notNull()
+			.default([]),
+		/** The publication status known when this snapshot was published; never rewritten. */
+		statusCheck: jsonb("status_check").$type<PaperStatusCheck>(),
 	},
 	(table) => [primaryKey({ columns: [table.snapshotId, table.paperId] })],
+);
+
+export type MatchEvidence = {
+	titles: [string, string];
+	/** Identical once normalised, identical without a subtitle, or a few characters apart. */
+	titleMatch: "same" | "subtitle" | "near";
+	years: [number, number];
+	sharedAuthors: string[];
+};
+/**
+ * Two papers sharing no identifier but alike in normalised title, year and an author's family
+ * name. A decision is the project's own and never merges, moves or rewrites either paper.
+ */
+export const paperMatch = pgTable(
+	"paper_match",
+	{
+		id: text("id").primaryKey(),
+		projectId: text("project_id")
+			.notNull()
+			.references(() => researchProject.id, { onDelete: "cascade" }),
+		/** Ordered so each pair is stored once per project. */
+		paperId: text("paper_id")
+			.notNull()
+			.references(() => paper.id),
+		otherPaperId: text("other_paper_id")
+			.notNull()
+			.references(() => paper.id),
+		evidence: jsonb("evidence").$type<MatchEvidence>().notNull(),
+		decision: text("decision").$type<"same-work" | "different-works">(),
+		revision: integer("revision").notNull().default(0),
+		decidedAt: timestamp("decided_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("paper_match_pair_idx").on(
+			table.projectId,
+			table.paperId,
+			table.otherPaperId,
+		),
+		check(
+			"paper_match_order_check",
+			sql`${table.paperId} < ${table.otherPaperId}`,
+		),
+	],
+);
+
+export type PaperStatusCheck =
+	| {
+			check: "checked" | "not-registered";
+			doi: string;
+			revision: number;
+			checkedAt: string;
+			updates: PublicationUpdate[];
+			relatedVersions: RelatedVersion[];
+	  }
+	| { check: "failed"; doi: string }
+	| { check: "not-covered" | "no-doi" | "not-run" };
+
+/**
+ * A DOI's publication status as a public fact. A changed answer adds a revision, so earlier
+ * snapshots keep theirs and later reviews can observe the change; `checkedAt` moves forward
+ * each time the same answer is confirmed.
+ */
+export const publicationStatus = pgTable(
+	"publication_status",
+	{
+		id: text("id").primaryKey(),
+		doi: text("doi").notNull(),
+		revision: integer("revision").notNull(),
+		registered: boolean("registered").notNull(),
+		updates: jsonb("updates").$type<PublicationUpdate[]>().notNull(),
+		relatedVersions: jsonb("related_versions")
+			.$type<RelatedVersion[]>()
+			.notNull(),
+		observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+		checkedAt: timestamp("checked_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		uniqueIndex("publication_status_doi_revision_idx").on(
+			table.doi,
+			table.revision,
+		),
+	],
 );
 
 /**

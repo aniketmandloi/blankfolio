@@ -3,9 +3,14 @@ import type { Database, Transaction } from "@blankfolio/db";
 import {
 	type AcquisitionReason,
 	literatureSnapshot,
+	type MatchEvidence,
+	type PaperStatusCheck,
 	paper,
 	paperAlias,
+	paperMatch,
+	publicationStatus,
 	researchJob,
+	type SourceObservation,
 	type SourceOutcome,
 	type SourceRecord,
 	snapshotPaper,
@@ -16,11 +21,11 @@ import {
 } from "@blankfolio/db/schema/literature";
 import { researchProject } from "@blankfolio/db/schema/projects";
 import { TRPCError } from "@trpc/server";
-import { and, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
 import { type JobWithMetadata, PgBoss } from "pg-boss";
+import type { PublicationStatusSource, StatusLookup } from "./crossref";
 import {
 	type LiteratureSource,
-	laterStageReserve,
 	literatureSources,
 	maxChargeMicros,
 	maxRetryAfterSeconds,
@@ -32,7 +37,7 @@ import {
 	type SourceQuotas,
 	type SourceResult,
 	SourceUnavailableError,
-	sourceAllocation,
+	sourceAllocations,
 	sourceAvailability,
 	TransientSourceError,
 	UncertainSourceOutcome,
@@ -58,12 +63,179 @@ export type LiteratureWorkerOptions = {
 	/** Off unless explicitly enabled: a job naming a fixture source then fails that source. */
 	fixtureSources?: boolean;
 	sources?: Record<string, LiteratureSource>;
+	/** Without one, snapshots record that publication status was not checked. */
+	statusSource?: PublicationStatusSource;
 	now?: () => Date;
 	sleep?: (milliseconds: number) => Promise<void>;
 };
 type Job = typeof researchJob.$inferSelect;
 type Execution = typeof sourceExecution.$inferSelect;
 type Failure = { outcome: "failed"; errorClass: string };
+
+type Kept = {
+	record: SourceRecord;
+	source: string;
+	aliases: string[];
+	alsoObserved: SourceObservation[];
+};
+/**
+ * Records are the same paper only when they share an exact identifier; titles never merge.
+ * Executions arrive in scope order, so earlier sources keep the primary observation.
+ */
+function keepRecords(executions: Execution[]) {
+	const kept: Kept[] = [];
+	const byAlias = new Map<string, Kept>();
+	for (const execution of executions)
+		for (const record of execution.records ?? []) {
+			const aliases = recordAliases(record);
+			const same = aliases
+				.map((alias) => byAlias.get(alias))
+				.find((entry) => entry !== undefined);
+			if (same) {
+				for (const alias of aliases)
+					if (!byAlias.has(alias)) {
+						byAlias.set(alias, same);
+						same.aliases.push(alias);
+					}
+				if (same.source !== execution.source)
+					same.alsoObserved.push({ source: execution.source, record });
+				continue;
+			}
+			if (kept.length >= recordCap) continue;
+			const entry: Kept = {
+				record,
+				source: execution.source,
+				aliases,
+				alsoObserved: [],
+			};
+			kept.push(entry);
+			for (const alias of aliases) byAlias.set(alias, entry);
+		}
+	return kept;
+}
+
+const normalisedTitle = (title: string) =>
+	title
+		.normalize("NFKD")
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}]+/gu, " ")
+		.trim();
+const familyNames = (authors: string[]) =>
+	new Set(
+		authors.flatMap(
+			(name) =>
+				name
+					.normalize("NFKD")
+					.toLowerCase()
+					.replace(/[^\p{L}\s-]/gu, "")
+					.trim()
+					.split(/\s+/)
+					.at(-1) || [],
+		),
+	);
+/** The title before a subtitle separator such as ": " or " - ". */
+const mainTitle = (title: string) =>
+	title.split(/[:?]\s|\s[-–—]\s/)[0] ?? title;
+function editDistance(a: string, b: string) {
+	let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+	for (let i = 1; i <= a.length; i++) {
+		const row = [i];
+		for (let j = 1; j <= b.length; j++)
+			row[j] = Math.min(
+				(previous[j] ?? 0) + 1,
+				(row[j - 1] ?? 0) + 1,
+				(previous[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1),
+			);
+		previous = row;
+	}
+	return previous[b.length] ?? 0;
+}
+function titleMatch(a: string, b: string): MatchEvidence["titleMatch"] | null {
+	const [full, otherFull] = [normalisedTitle(a), normalisedTitle(b)];
+	if (full === otherFull) return "same";
+	const [main, otherMain] = [
+		normalisedTitle(mainTitle(a)),
+		normalisedTitle(mainTitle(b)),
+	];
+	if (
+		(main !== full || otherMain !== otherFull) &&
+		main === otherMain &&
+		main.split(" ").length >= 3
+	)
+		return "subtitle";
+	return editDistance(full, otherFull) <=
+		Math.max(1, Math.floor(Math.max(full.length, otherFull.length) / 10))
+		? "near"
+		: null;
+}
+type MatchCandidate = {
+	id: string;
+	title: string;
+	authors: string[];
+	year: number;
+};
+/**
+ * Pairs of distinct papers, at least one of them new, whose titles match or nearly match, whose
+ * years are at most one apart and which share an author's family name. A title alone is never
+ * enough.
+ */
+function possibleMatches(fresh: MatchCandidate[], earlier: MatchCandidate[]) {
+	const byName = new Map<string, MatchCandidate[]>();
+	for (const paper of [...fresh, ...earlier])
+		for (const name of familyNames(paper.authors))
+			byName.set(name, [...(byName.get(name) ?? []), paper]);
+	const pairs = new Map<
+		string,
+		{ paperId: string; otherPaperId: string; evidence: MatchEvidence }
+	>();
+	for (const one of fresh)
+		for (const name of familyNames(one.authors))
+			for (const other of byName.get(name) ?? []) {
+				if (other.id === one.id) continue;
+				const [first, second] = one.id < other.id ? [one, other] : [other, one];
+				const key = `${first.id}|${second.id}`;
+				if (pairs.has(key) || Math.abs(first.year - second.year) > 1) continue;
+				const match = titleMatch(first.title, second.title);
+				if (!match) continue;
+				const names = familyNames(second.authors);
+				pairs.set(key, {
+					paperId: first.id,
+					otherPaperId: second.id,
+					evidence: {
+						titles: [first.title, second.title],
+						titleMatch: match,
+						years: [first.year, second.year],
+						sharedAuthors: [...familyNames(first.authors)]
+							.filter((family) => names.has(family))
+							.sort(),
+					},
+				});
+			}
+	return [...pairs.values()];
+}
+
+/** Statuses confirmed within this window are reused rather than looked up again. */
+const statusFreshSeconds = 24 * 60 * 60;
+const recordDoi = (record: SourceRecord) => record.doi?.toLowerCase() ?? null;
+/** Stable key order, since jsonb does not keep the order objects were written in. */
+const canonical = (value: unknown) =>
+	JSON.stringify(value, (_key, item) =>
+		item && typeof item === "object" && !Array.isArray(item)
+			? Object.fromEntries(
+					Object.entries(item).sort(([a], [b]) => a.localeCompare(b)),
+				)
+			: item,
+	);
+async function latestStatuses(db: Database | Transaction, dois: string[]) {
+	if (!dois.length)
+		return new Map<string, typeof publicationStatus.$inferSelect>();
+	const rows = await db
+		.selectDistinctOn([publicationStatus.doi])
+		.from(publicationStatus)
+		.where(inArray(publicationStatus.doi, dois))
+		.orderBy(publicationStatus.doi, desc(publicationStatus.revision));
+	return new Map(rows.map((row) => [row.doi, row]));
+}
 
 /** Project tombstone/archive and account eligibility, re-checked before every stage. */
 async function guard(
@@ -118,6 +290,7 @@ export function createLiteratureWorker({
 	quotas = {},
 	fixtureSources = false,
 	sources = literatureSources,
+	statusSource,
 	now = () => new Date(),
 	sleep = (milliseconds) =>
 		new Promise((resolve) => setTimeout(resolve, milliseconds)),
@@ -129,7 +302,7 @@ export function createLiteratureWorker({
 			if (!job) return null;
 			if (job.state === "queued") {
 				const { scope } = job.input;
-				const allocation = sourceAllocation(scope.sources.length);
+				const { allocation } = sourceAllocations(scope.sources);
 				await tx
 					.insert(sourceExecution)
 					.values(
@@ -145,7 +318,7 @@ export function createLiteratureWorker({
 								jobId,
 								projectId: job.projectId,
 								source: id,
-								allocation,
+								allocation: allocation(id),
 								effectiveQueries: scope.queries,
 								appliedFilters: filters.applied,
 								unsupportedFilters: filters.unsupported,
@@ -196,6 +369,43 @@ export function createLiteratureWorker({
 					pausedUntil: sql`greatest(${sourceThrottle.pausedUntil}, excluded.paused_until)`,
 				},
 			});
+	}
+
+	/**
+	 * Serialises a source's requests across every worker with a transaction-scoped advisory lock,
+	 * starting each no sooner than `minIntervalSeconds` after the previous one finished.
+	 */
+	function pacer(source: { id: string; minIntervalSeconds?: number }) {
+		const interval = source.minIntervalSeconds;
+		return <T>(request: () => Promise<T>): Promise<T> =>
+			interval
+				? db.transaction(async (tx) => {
+						await tx.execute(
+							sql`select pg_advisory_xact_lock(hashtext(${`source-pace:${source.id}`}))`,
+						);
+						const [throttle] = await tx
+							.select({ pausedUntil: sourceThrottle.pausedUntil })
+							.from(sourceThrottle)
+							.where(eq(sourceThrottle.source, source.id));
+						const wait =
+							(throttle?.pausedUntil.getTime() ?? 0) - now().getTime();
+						if (wait > 0) await sleep(wait);
+						try {
+							return await request();
+						} finally {
+							const pausedUntil = new Date(now().getTime() + interval * 1000);
+							await tx
+								.insert(sourceThrottle)
+								.values({ source: source.id, pausedUntil })
+								.onConflictDoUpdate({
+									target: sourceThrottle.source,
+									set: {
+										pausedUntil: sql`greatest(${sourceThrottle.pausedUntil}, excluded.paused_until)`,
+									},
+								});
+						}
+					})
+				: request();
 	}
 
 	function responseCache(projectId: string, sourceId: string): SourceCache {
@@ -312,6 +522,7 @@ export function createLiteratureWorker({
 				finalAttempt: attempt === maxSourceAttempts,
 				routes,
 				cache: responseCache(job.projectId, source.id),
+				pace: pacer(source),
 			};
 			let reservation: string | undefined;
 			if (metered) {
@@ -413,7 +624,98 @@ export function createLiteratureWorker({
 			);
 	}
 
-	async function publish(jobId: string) {
+	async function recordStatus(
+		doi: string,
+		answer: Exclude<StatusLookup, { outcome: "failed" }>,
+	) {
+		const content =
+			answer.outcome === "checked"
+				? {
+						registered: true,
+						updates: answer.updates,
+						relatedVersions: answer.relatedVersions,
+					}
+				: { registered: false, updates: [], relatedVersions: [] };
+		await db.transaction(async (tx) => {
+			await tx.execute(
+				sql`select pg_advisory_xact_lock(hashtext(${`publication-status:${doi}`}))`,
+			);
+			const latest = (await latestStatuses(tx, [doi])).get(doi);
+			const checkedAt = now();
+			if (
+				latest &&
+				canonical({
+					registered: latest.registered,
+					updates: latest.updates,
+					relatedVersions: latest.relatedVersions,
+				}) === canonical(content)
+			)
+				await tx
+					.update(publicationStatus)
+					.set({ checkedAt })
+					.where(eq(publicationStatus.id, latest.id));
+			else
+				await tx.insert(publicationStatus).values({
+					id: randomUUID(),
+					doi,
+					revision: (latest?.revision ?? 0) + 1,
+					...content,
+					observedAt: checkedAt,
+					checkedAt,
+				});
+		});
+	}
+
+	/**
+	 * Checks each kept DOI the agency registers, reusing answers confirmed within a day. Stops at
+	 * the first failure so the rest stay unknown; returns null once the job may not continue.
+	 */
+	async function reconcileStatuses(jobId: string, executions: Execution[]) {
+		if (!statusSource) return { errorClass: "not-configured" };
+		const dois = [
+			...new Set(
+				keepRecords(executions).flatMap(({ record }) => {
+					const doi = recordDoi(record);
+					return doi && statusSource.covers(doi) ? [doi] : [];
+				}),
+			),
+		];
+		const known = await latestStatuses(db, dois);
+		const pace = pacer(statusSource);
+		for (const doi of dois) {
+			const latest = known.get(doi);
+			if (
+				latest &&
+				now().getTime() - latest.checkedAt.getTime() <=
+					statusFreshSeconds * 1000
+			)
+				continue;
+			let answer: StatusLookup | undefined;
+			for (let attempt = 1; attempt <= maxSourceAttempts; attempt++) {
+				if (!(await claim(jobId))) return null;
+				if ((await pausedFor(statusSource.id)) > maxRetryAfterSeconds * 1000)
+					return { errorClass: "rate-limited" };
+				answer = await pace(() => statusSource.lookup(doi));
+				if (answer.outcome !== "failed") break;
+				const wait = answer.retryAfterSeconds ?? 0;
+				if (wait > maxRetryAfterSeconds) {
+					await pause(statusSource.id, wait);
+					break;
+				}
+				if (!answer.retryable || attempt === maxSourceAttempts) break;
+				await sleep(Math.max(wait * 1000, 1000 * 2 ** (attempt - 1)));
+			}
+			if (!answer || answer.outcome === "failed")
+				return { errorClass: answer?.errorClass ?? "source-unavailable" };
+			await recordStatus(doi, answer);
+		}
+		return { errorClass: null };
+	}
+
+	async function publish(
+		jobId: string,
+		statusRun: { errorClass: string | null },
+	) {
 		await db.transaction(async (tx) => {
 			const job = await lockActiveJob(tx, jobId);
 			if (job?.state !== "running") return;
@@ -441,29 +743,7 @@ export function createLiteratureWorker({
 			executions.sort(
 				(a, b) => order.indexOf(a.source) - order.indexOf(b.source),
 			);
-			// Records are the same paper only when they share an exact identifier; titles never merge.
-			type Kept = { record: SourceRecord; source: string; aliases: string[] };
-			const kept: Kept[] = [];
-			const byAlias = new Map<string, Kept>();
-			for (const execution of executions)
-				for (const record of execution.records ?? []) {
-					const aliases = recordAliases(record);
-					const same = aliases
-						.map((alias) => byAlias.get(alias))
-						.find((entry) => entry !== undefined);
-					if (same) {
-						for (const alias of aliases)
-							if (!byAlias.has(alias)) {
-								byAlias.set(alias, same);
-								same.aliases.push(alias);
-							}
-						continue;
-					}
-					if (kept.length >= recordCap) continue;
-					const entry = { record, source: execution.source, aliases };
-					kept.push(entry);
-					for (const alias of aliases) byAlias.set(alias, entry);
-				}
+			const kept = keepRecords(executions);
 			const owners = kept.length
 				? new Map(
 						(
@@ -532,13 +812,54 @@ export function createLiteratureWorker({
 					)
 					.onConflictDoNothing();
 			// Two records can resolve to one earlier paper through different identifiers.
-			const seen = new Set<string>();
+			const first = new Map<string, Kept>();
 			const members = kept.filter((entry) => {
 				const id = paperIds.get(entry) ?? "";
-				if (seen.has(id)) return false;
-				seen.add(id);
-				return true;
+				const earlier = first.get(id);
+				if (!earlier) {
+					first.set(id, entry);
+					return true;
+				}
+				earlier.alsoObserved.push(
+					{ source: entry.source, record: entry.record },
+					...entry.alsoObserved,
+				);
+				return false;
 			});
+			const checkedAt = now();
+			const statuses = await latestStatuses(
+				tx,
+				members.flatMap(({ record }) => recordDoi(record) ?? []),
+			);
+			const statusChecks = new Map(
+				members.map((entry): [Kept, PaperStatusCheck] => {
+					const doi = recordDoi(entry.record);
+					if (!doi) return [entry, { check: "no-doi" }];
+					if (!statusSource) return [entry, { check: "not-run" }];
+					if (!statusSource.covers(doi))
+						return [entry, { check: "not-covered" }];
+					const status = statuses.get(doi);
+					return [
+						entry,
+						status &&
+						checkedAt.getTime() - status.checkedAt.getTime() <=
+							statusFreshSeconds * 1000
+							? {
+									check: status.registered ? "checked" : "not-registered",
+									doi,
+									revision: status.revision,
+									checkedAt: status.checkedAt.toISOString(),
+									updates: status.updates,
+									relatedVersions: status.relatedVersions,
+								}
+							: { check: "failed", doi },
+					];
+				}),
+			);
+			const count = (check: PaperStatusCheck["check"]) =>
+				[...statusChecks.values()].filter((status) => status.check === check)
+					.length;
+			const answeredStatuses = count("checked") + count("not-registered");
 			const snapshotId = randomUUID();
 			await tx.insert(literatureSnapshot).values({
 				id: snapshotId,
@@ -556,8 +877,23 @@ export function createLiteratureWorker({
 						: "partial",
 				recordCap,
 				paperCount: members.length,
+				statusCheck: {
+					source: statusSource?.id ?? "crossref",
+					outcome: !statusSource
+						? "not-run"
+						: count("failed") === 0
+							? "complete"
+							: answeredStatuses
+								? "partial"
+								: "failed",
+					checked: count("checked"),
+					notRegistered: count("not-registered"),
+					unknown: count("failed"),
+					errorClass: statusRun.errorClass,
+					checkedAt: checkedAt.toISOString(),
+				},
 				allocations: {
-					reserved: laterStageReserve,
+					reserved: sourceAllocations(job.input.scope.sources).reserved,
 					sources: executions.map((execution) => {
 						const counts: Partial<Record<AcquisitionReason, number>> = {};
 						for (const { record, source } of members)
@@ -582,8 +918,42 @@ export function createLiteratureWorker({
 						rank,
 						acquisitionReason: entry.record.acquisitionReason,
 						observation: entry.record,
+						alsoObserved: entry.alsoObserved,
+						statusCheck: statusChecks.get(entry),
 					})),
 				);
+			const candidates = members.map((entry) => ({
+				id: paperIds.get(entry) ?? "",
+				title: entry.record.title,
+				authors: entry.record.authors,
+				year: entry.record.year,
+			}));
+			const candidateIds = new Set(candidates.map((candidate) => candidate.id));
+			// Any paper this project's earlier snapshots kept, compared by its public record.
+			const earlier = (
+				await tx
+					.selectDistinct({
+						id: paper.id,
+						title: paper.title,
+						authors: paper.authors,
+						year: paper.year,
+					})
+					.from(snapshotPaper)
+					.innerJoin(paper, eq(paper.id, snapshotPaper.paperId))
+					.where(eq(snapshotPaper.projectId, job.projectId))
+			).filter((candidate) => !candidateIds.has(candidate.id));
+			const matches = possibleMatches(candidates, earlier);
+			if (matches.length)
+				await tx
+					.insert(paperMatch)
+					.values(
+						matches.map((match) => ({
+							id: randomUUID(),
+							projectId: job.projectId,
+							...match,
+						})),
+					)
+					.onConflictDoNothing();
 			await tx
 				.update(researchJob)
 				.set({ state: "succeeded", stage: "done", ...done })
@@ -610,9 +980,23 @@ export function createLiteratureWorker({
 		if (!(await claim(jobId))) return;
 		await db
 			.update(researchJob)
+			.set({ stage: "reconciling", updatedAt: new Date() })
+			.where(eq(researchJob.id, jobId));
+		const statusRun = await reconcileStatuses(
+			jobId,
+			(
+				await db
+					.select()
+					.from(sourceExecution)
+					.where(eq(sourceExecution.jobId, jobId))
+			).sort((a, b) => order.indexOf(a.source) - order.indexOf(b.source)),
+		);
+		if (!statusRun || !(await claim(jobId))) return;
+		await db
+			.update(researchJob)
 			.set({ stage: "publishing", updatedAt: new Date() })
 			.where(eq(researchJob.id, jobId));
-		await publish(jobId);
+		await publish(jobId, statusRun);
 	};
 }
 

@@ -1,0 +1,1038 @@
+import { randomUUID } from "node:crypto";
+import { createArxivSource } from "@blankfolio/api/arxiv";
+import { createCrossrefStatus } from "@blankfolio/api/crossref";
+import {
+	literatureSources,
+	type SourceSettings,
+} from "@blankfolio/api/literature-sources";
+import type { LiteratureWorkerOptions } from "@blankfolio/api/literature-worker";
+import { createOpenAlexSource } from "@blankfolio/api/openalex";
+import type { AppRouter } from "@blankfolio/api/routers/index";
+import { createTRPCClient, httpLink } from "@trpc/client";
+import { expect, test } from "vitest";
+import { arxivEntry, arxivFeed, atom } from "./arxiv-fixture";
+import {
+	crossrefJson,
+	crossrefNotFound,
+	crossrefUpdate,
+	crossrefWork,
+} from "./crossref-fixture";
+import {
+	json,
+	openAlexFetch,
+	openAlexPage,
+	openAlexWork,
+} from "./openalex-fixture";
+import { createTestWorkspace, fixturePrices } from "./workspace-fixture";
+
+type Workspace = Awaited<ReturnType<typeof createTestWorkspace>>;
+const scenario = (name: string, run: (workspace: Workspace) => Promise<void>) =>
+	test.concurrent(name, async () => {
+		const workspace = await createTestWorkspace();
+		try {
+			await run(workspace);
+		} finally {
+			await workspace.close();
+		}
+	}, 240_000);
+
+const settings: SourceSettings = {
+	prices: {
+		...fixturePrices,
+		"openalex-search": 1_000,
+		"openalex-filter": 100,
+	},
+	quotas: { openalex: 1_000_000 },
+	fixtureSources: true,
+};
+
+function researcherFor(workspace: Workspace, cookie: string) {
+	const app = workspace.createAuthApp({}, settings);
+	return createTRPCClient<AppRouter>({
+		links: [
+			httpLink({
+				url: "http://localhost/trpc",
+				headers: { cookie },
+				fetch: async (url, init) => app.request(new Request(url, init)),
+			}),
+		],
+	});
+}
+type Researcher = ReturnType<typeof researcherFor>;
+type Paper = Awaited<
+	ReturnType<Researcher["literature"]["snapshot"]["query"]>
+>["papers"][number];
+
+async function projectWithScope(
+	researcher: Researcher,
+	scope: { queries: string[]; sources: string[] },
+) {
+	const project = await researcher.projects.create.mutate({
+		title: "arXiv freshness",
+	});
+	await researcher.projects.saveBrief.mutate({
+		id: project.id,
+		expectedRevision: 1,
+		brief: { ...project.brief, topic: "Tabular transfer learning" },
+	});
+	const current = await researcher.literature.scope.query({
+		projectId: project.id,
+	});
+	await researcher.literature.saveScope.mutate({
+		projectId: project.id,
+		expectedRevision: current.revision,
+		scope: {
+			...current.scope,
+			dateFrom: "2021-01-01",
+			dateTo: "2026-06-30",
+			includeFoundations: false,
+			...scope,
+		},
+	});
+	return project.id;
+}
+async function saveSources(
+	researcher: Researcher,
+	projectId: string,
+	sources: string[],
+) {
+	const current = await researcher.literature.scope.query({ projectId });
+	await researcher.literature.saveScope.mutate({
+		projectId,
+		expectedRevision: current.revision,
+		scope: { ...current.scope, sources },
+	});
+}
+async function search(researcher: Researcher, projectId: string) {
+	const scope = await researcher.literature.scope.query({ projectId });
+	const job = await researcher.literature.submitSearch.mutate({
+		projectId,
+		scopeRevision: scope.revision,
+		idempotencyKey: randomUUID(),
+		queries: scope.scope.queries,
+	});
+	return job.id;
+}
+async function outcome(
+	researcher: Researcher,
+	projectId: string,
+	jobId: string,
+) {
+	const job = await researcher.literature.job.query({ projectId, jobId });
+	const snapshot = job.snapshotId
+		? await researcher.literature.snapshot.query({
+				projectId,
+				snapshotId: job.snapshotId,
+			})
+		: null;
+	return {
+		job,
+		snapshot,
+		source: (id: string) => job.sources.find((s) => s.source === id),
+	};
+}
+
+/** Worker options whose provider adapters answer through one recording fetch and record waits. */
+function providerWorker(handler: Parameters<typeof openAlexFetch>[0]) {
+	const recorder = openAlexFetch(handler);
+	const sleeps: number[] = [];
+	const clock = { now: new Date() };
+	const now = () => clock.now;
+	const options: Partial<LiteratureWorkerOptions> = {
+		...settings,
+		now,
+		sleep: async (milliseconds) => {
+			sleeps.push(milliseconds);
+		},
+		sources: {
+			...literatureSources,
+			openalex: createOpenAlexSource({
+				apiKey: "test-openalex-key",
+				fetch: recorder.fetch,
+				now,
+			}),
+			arxiv: createArxivSource({ fetch: recorder.fetch, now }),
+		},
+		statusSource: createCrossrefStatus({
+			fetch: recorder.fetch,
+			mailto: "operator@example.test",
+		}),
+	};
+	return {
+		options,
+		calls: recorder.calls,
+		sleeps,
+		advance: (seconds: number) => {
+			clock.now = new Date(clock.now.getTime() + seconds * 1000);
+		},
+	};
+}
+
+scenario(
+	"an arXiv search keeps effective queries, versions, dates, DOI links and abstract availability, one paced request at a time",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("arxiv-journey"),
+		);
+		const projectId = await projectWithScope(researcher, {
+			queries: ["tabular transfer (learning)", "arXiv:2206.15306"],
+			sources: ["arxiv"],
+		});
+		const page = (from: number, count: number) =>
+			Array.from({ length: count }, (_, i) =>
+				arxivEntry(`2401.${String(from + i).padStart(5, "0")}`),
+			);
+		const worker = providerWorker((url) => {
+			if (url.searchParams.get("id_list"))
+				return atom(
+					arxivFeed([
+						arxivEntry("2206.15306", {
+							version: 2,
+							title: "Transfer Learning with Deep\n      Tabular Models",
+							published: "2022-06-30T14:24:32Z",
+							updated: "2023-08-07T04:07:06Z",
+							journalRef:
+								"International Conference on Learning Representations (ICLR), 2023",
+							doi: "10.1234/Published.15306",
+						}),
+					]),
+				);
+			const start = Number(url.searchParams.get("start"));
+			const count = Number(url.searchParams.get("max_results"));
+			return atom(arxivFeed(page(start, count), 420, start));
+		});
+
+		const jobId = await search(researcher, projectId);
+		await workspace.runQueuedJobs(worker.options);
+		const run = await outcome(researcher, projectId, jobId);
+		expect(run.job.state).toBe("succeeded");
+		expect(run.source("arxiv")).toMatchObject({
+			label: "arXiv",
+			status: "succeeded",
+			attempts: 1,
+			allocation: 160,
+			reportedCount: 421,
+			receivedCount: 160,
+			truncated: true,
+			cursor: JSON.stringify([159]),
+			errorClass: null,
+			unsupportedFilters: [],
+			appliedFilters: [
+				"all:tabular AND all:transfer AND all:learning AND submittedDate:[202101010000 TO 202606302359]",
+				"arXiv identifiers looked up directly (id_list) without the date filter",
+			],
+		});
+
+		expect(
+			worker.calls.map(({ url }) => [
+				url.origin + url.pathname,
+				url.searchParams.get("search_query"),
+				url.searchParams.get("id_list"),
+				url.searchParams.get("start"),
+				url.searchParams.get("max_results"),
+			]),
+		).toEqual([
+			["https://export.arxiv.org/api/query", null, "2206.15306", null, "1"],
+			[
+				"https://export.arxiv.org/api/query",
+				"all:tabular AND all:transfer AND all:learning AND submittedDate:[202101010000 TO 202606302359]",
+				null,
+				"0",
+				"100",
+			],
+			[
+				"https://export.arxiv.org/api/query",
+				"all:tabular AND all:transfer AND all:learning AND submittedDate:[202101010000 TO 202606302359]",
+				null,
+				"100",
+				"59",
+			],
+		]);
+		// arXiv allows one request every three seconds across the deployment.
+		expect(worker.sleeps.filter((ms) => ms === 3_000)).toHaveLength(2);
+
+		const snapshot = run.snapshot;
+		expect(snapshot?.paperCount).toBe(160);
+		expect(
+			snapshot?.papers.find((p) => p.acquisitionReason === "direct-lookup"),
+		).toEqual(
+			expect.objectContaining({
+				title: "Transfer Learning with Deep Tabular Models",
+				authors: ["Ada Record", "Ben Sample"],
+				year: 2022,
+				publicationDate: "2022-06-30",
+				doi: "10.48550/arxiv.2206.15306",
+				identifiers: ["doi:10.48550/arxiv.2206.15306", "arxiv:2206.15306"],
+				url: "https://arxiv.org/abs/2206.15306v2",
+				preprint: true,
+				workType: "preprint",
+				abstractAvailable: true,
+				version: "v2",
+				versionDate: "2023-08-07",
+				relatedVersions: [
+					{
+						identifier: "doi:10.1234/published.15306",
+						relation: "published-version",
+						note: "International Conference on Learning Representations (ICLR), 2023",
+						paperId: null,
+					},
+				],
+				source: "arxiv",
+			}),
+		);
+		expect(
+			snapshot?.papers.find((p) => p.title === "Recorded preprint 2401.00000"),
+		).toEqual(
+			expect.objectContaining({
+				version: "v1",
+				relatedVersions: [],
+				acquisitionReason: "discovery",
+			}),
+		);
+	},
+);
+
+scenario(
+	"OpenAlex and arXiv share the record cap, reconcile exact identifiers with every source's observation, and link preprints to published versions without merging them",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("arxiv-openalex"),
+		);
+		const projectId = await projectWithScope(researcher, {
+			queries: ["tabular transfer learning"],
+			sources: ["openalex", "arxiv"],
+		});
+		const worker = providerWorker((url) =>
+			url.hostname === "api.openalex.org"
+				? json(
+						openAlexPage([
+							openAlexWork(1),
+							openAlexWork(2, {
+								doi: "https://doi.org/10.48550/arXiv.2401.00001",
+								ids: { openalex: "https://openalex.org/W2" },
+								type: "preprint",
+								display_name: "OpenAlex's title for the preprint",
+							}),
+						]),
+					)
+				: atom(
+						arxivFeed([
+							arxivEntry("2401.00001", { version: 3 }),
+							arxivEntry("2401.00002", { doi: "10.1234/Recorded.1" }),
+						]),
+					),
+		);
+		const jobId = await search(researcher, projectId);
+		await workspace.runQueuedJobs(worker.options);
+		const { snapshot, source } = await outcome(researcher, projectId, jobId);
+		expect(source("openalex")?.allocation).toBe(160);
+		expect(source("arxiv")?.allocation).toBe(40);
+		expect(snapshot?.allocations).toEqual({
+			reserved: 0,
+			sources: [
+				{ source: "openalex", allocation: 160, kept: { discovery: 2 } },
+				{ source: "arxiv", allocation: 40, kept: { discovery: 1 } },
+			],
+		});
+		expect(snapshot?.paperCount).toBe(3);
+
+		const preprint = snapshot?.papers.find((p) =>
+			p.identifiers.includes("arxiv:2401.00001"),
+		);
+		expect(preprint).toMatchObject({
+			source: "openalex",
+			title: "OpenAlex's title for the preprint",
+			alsoObserved: [
+				{
+					source: "arxiv",
+					title: "Recorded preprint 2401.00001",
+					version: "v3",
+					url: "https://arxiv.org/abs/2401.00001v3",
+					identifiers: ["doi:10.48550/arxiv.2401.00001", "arxiv:2401.00001"],
+				},
+			],
+		});
+		const journal = snapshot?.papers.find(
+			(p) => p.title === "Recorded work W1",
+		);
+		const laterPreprint = snapshot?.papers.find((p) =>
+			p.identifiers.includes("arxiv:2401.00002"),
+		);
+		expect(laterPreprint?.id).not.toBe(journal?.id);
+		expect(laterPreprint?.relatedVersions).toEqual([
+			{
+				identifier: "doi:10.1234/recorded.1",
+				relation: "published-version",
+				note: null,
+				paperId: journal?.id,
+			},
+		]);
+	},
+);
+
+scenario(
+	"a newer arXiv version is a new observation of the same paper and never rewrites the version an earlier snapshot recorded",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("arxiv-versions"),
+		);
+		const projectId = await projectWithScope(researcher, {
+			queries: ["2402.00001"],
+			sources: ["arxiv"],
+		});
+		let latest = arxivEntry("2402.00001", { title: "First title" });
+		const worker = providerWorker(() => atom(arxivFeed([latest])));
+		const run = async () => {
+			const jobId = await search(researcher, projectId);
+			await workspace.runQueuedJobs(worker.options);
+			return (await outcome(researcher, projectId, jobId)).snapshot;
+		};
+		const first = await run();
+
+		latest = arxivEntry("2402.00001", {
+			version: 2,
+			title: "Revised title",
+			updated: "2026-09-01T09:00:00Z",
+			doi: "10.1234/Journal.2402",
+		});
+		worker.advance(2 * 24 * 60 * 60);
+		const second = await run();
+		expect(worker.calls).toHaveLength(2);
+		expect(second?.papers).toEqual([
+			expect.objectContaining({
+				id: first?.papers[0]?.id,
+				title: "Revised title",
+				version: "v2",
+				versionDate: "2026-09-01",
+				relatedVersions: [
+					expect.objectContaining({ identifier: "doi:10.1234/journal.2402" }),
+				],
+			}),
+		]);
+		const reread = await researcher.literature.snapshot.query({
+			projectId,
+			snapshotId: first?.id ?? "",
+		});
+		expect(reread.papers).toEqual([
+			expect.objectContaining({
+				title: "First title",
+				version: "v1",
+				url: "https://arxiv.org/abs/2402.00001v1",
+				relatedVersions: [],
+			}),
+		]);
+	},
+);
+
+scenario(
+	"arXiv requests from concurrent workers never overlap, and a long provider pause stops every project's arXiv search without a request",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("arxiv-throttle"),
+		);
+		let inFlight = 0;
+		let mostInFlight = 0;
+		let busy = false;
+		const worker = providerWorker(async () => {
+			inFlight++;
+			mostInFlight = Math.max(mostInFlight, inFlight);
+			await new Promise((resolve) => setTimeout(resolve, 150));
+			inFlight--;
+			return busy
+				? new Response("Rate exceeded.", {
+						status: 503,
+						headers: { "retry-after": "600" },
+					})
+				: atom(arxivFeed([arxivEntry("2403.00001")]));
+		});
+		const first = await projectWithScope(researcher, {
+			queries: ["calibration shift", "label noise"],
+			sources: ["arxiv"],
+		});
+		const second = await projectWithScope(researcher, {
+			queries: ["domain adaptation", "tabular benchmarks"],
+			sources: ["arxiv"],
+		});
+		await search(researcher, first);
+		await search(researcher, second);
+		await Promise.all([
+			workspace.runNextJob(worker.options),
+			workspace.runNextJob(worker.options),
+		]);
+		expect(worker.calls).toHaveLength(4);
+		expect(mostInFlight).toBe(1);
+
+		busy = true;
+		worker.advance(2 * 24 * 60 * 60);
+		const refused = await search(researcher, first);
+		await workspace.runQueuedJobs(worker.options);
+		// A cached answer from two days ago is labelled stale rather than waiting ten minutes.
+		expect(
+			(await outcome(researcher, first, refused)).source("arxiv"),
+		).toMatchObject({
+			status: "partial",
+			attempts: 1,
+			errorClass: "stale-cache",
+			cacheAgeSeconds: 2 * 24 * 60 * 60,
+		});
+		expect(worker.calls).toHaveLength(5);
+
+		await saveSources(researcher, second, ["arxiv", "fixture-catalog"]);
+		const paused = await search(researcher, second);
+		await workspace.runQueuedJobs(worker.options);
+		const during = await outcome(researcher, second, paused);
+		expect(during.job.state).toBe("succeeded");
+		expect(during.source("arxiv")).toMatchObject({
+			status: "failed",
+			attempts: 0,
+			errorClass: "rate-limited",
+		});
+		expect(during.snapshot?.coverage).toBe("partial");
+		expect(worker.calls).toHaveLength(5);
+	},
+);
+
+scenario(
+	"Crossref reconciliation exposes retractions, corrections, withdrawals and last-checked dates, flags disallowed support, and versions later status changes without rewriting earlier snapshots",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("crossref-status"),
+		);
+		const projectId = await projectWithScope(researcher, {
+			queries: ["tabular transfer learning"],
+			sources: ["openalex", "arxiv"],
+		});
+		const noDoi = { doi: null, ids: { openalex: "https://openalex.org/W5" } };
+		let secondRetracted = false;
+		const worker = providerWorker((url) => {
+			if (url.hostname === "api.openalex.org")
+				return json(
+					openAlexPage([
+						openAlexWork(1),
+						openAlexWork(2),
+						openAlexWork(3),
+						openAlexWork(4),
+						openAlexWork(5, noDoi),
+					]),
+				);
+			if (url.hostname === "export.arxiv.org")
+				return atom(
+					arxivFeed([
+						arxivEntry("2401.00003"),
+						arxivEntry("2401.00009", {
+							version: 2,
+							comment: "This paper has been withdrawn by the author",
+						}),
+						arxivEntry("2401.00010", {
+							comment: "12 pages; extends a withdrawn workshop version",
+						}),
+					]),
+				);
+			const doi = decodeURIComponent(url.pathname.replace("/works/", ""));
+			if (doi === "10.1234/recorded.1")
+				return crossrefJson(
+					crossrefWork(doi, {
+						"updated-by": [
+							crossrefUpdate("retraction", "Retraction", "2025-02-06"),
+							crossrefUpdate("correction", "Correction", "2024-03-06", {
+								source: "publisher",
+							}),
+						],
+					}),
+				);
+			if (doi === "10.1234/recorded.2")
+				return crossrefJson(
+					crossrefWork(doi, {
+						"updated-by": [
+							crossrefUpdate("correction", "Correction", "2025-01-10"),
+							...(secondRetracted
+								? [crossrefUpdate("retraction", "Retraction", "2026-09-10")]
+								: []),
+						],
+					}),
+				);
+			if (doi === "10.1234/recorded.3")
+				return crossrefJson(
+					crossrefWork(doi, {
+						relation: {
+							"has-preprint": [
+								{
+									"id-type": "doi",
+									id: "10.48550/arXiv.2401.00003",
+									"asserted-by": "subject",
+								},
+							],
+						},
+					}),
+				);
+			return crossrefNotFound();
+		});
+		const run = async () => {
+			const jobId = await search(researcher, projectId);
+			await workspace.runQueuedJobs(worker.options);
+			return (await outcome(researcher, projectId, jobId)).snapshot;
+		};
+		const first = await run();
+		const checkedAt = first?.statusCheck?.checkedAt;
+		expect(first?.statusCheck).toEqual({
+			source: "crossref",
+			outcome: "complete",
+			checked: 3,
+			notRegistered: 1,
+			unknown: 0,
+			errorClass: null,
+			checkedAt: expect.any(String),
+		});
+		const crossrefCalls = () =>
+			worker.calls.filter(({ url }) => url.hostname === "api.crossref.org");
+		expect(
+			crossrefCalls().map(({ url }) => [
+				decodeURIComponent(url.pathname),
+				url.searchParams.get("mailto"),
+			]),
+		).toEqual(
+			[1, 2, 3, 4].map((n) => [
+				`/works/10.1234/recorded.${n}`,
+				"operator@example.test",
+			]),
+		);
+
+		const status = (snapshot: typeof first, match: (p: Paper) => boolean) =>
+			snapshot?.papers.find(match)?.publicationStatus;
+		const byTitle = (title: string) => (p: Paper) => p.title === title;
+		const byArxiv = (id: string) => (p: Paper) =>
+			p.identifiers.includes(`arxiv:${id}`);
+		expect(status(first, byTitle("Recorded work W1"))).toEqual({
+			state: "retracted",
+			positiveSupport: "disallowed",
+			check: "checked",
+			checkedAt,
+			newerStatusKnown: false,
+			updates: [
+				{
+					type: "correction",
+					label: "Correction",
+					source: "publisher",
+					notice: "doi:10.1234/notice.correction.2024-03-06",
+					date: "2024-03-06",
+				},
+				{
+					type: "retraction",
+					label: "Retraction",
+					source: "retraction-watch",
+					notice: "doi:10.1234/notice.retraction.2025-02-06",
+					date: "2025-02-06",
+				},
+			],
+		});
+		expect(status(first, byTitle("Recorded work W2"))).toMatchObject({
+			state: "corrected",
+			positiveSupport: "review",
+			check: "checked",
+		});
+		expect(status(first, byTitle("Recorded work W3"))).toMatchObject({
+			state: "no-known-updates",
+			positiveSupport: "allowed",
+			check: "checked",
+			updates: [],
+		});
+		const preprint = first?.papers.find(byArxiv("2401.00003"));
+		expect(
+			first?.papers.find(byTitle("Recorded work W3"))?.relatedVersions,
+		).toEqual([
+			{
+				identifier: "doi:10.48550/arxiv.2401.00003",
+				relation: "preprint",
+				note: "Crossref",
+				paperId: preprint?.id,
+			},
+		]);
+		expect(status(first, byTitle("Recorded work W4"))).toMatchObject({
+			state: "unknown",
+			positiveSupport: "allowed",
+			check: "not-registered",
+		});
+		expect(status(first, byTitle("Recorded work W5"))).toMatchObject({
+			state: "unknown",
+			check: "no-doi",
+			checkedAt: null,
+		});
+		expect(status(first, byArxiv("2401.00009"))).toMatchObject({
+			state: "withdrawn",
+			positiveSupport: "disallowed",
+			check: "not-covered",
+			updates: [
+				{
+					type: "withdrawal",
+					label: "Withdrawn, according to the arXiv comment",
+					source: "arxiv",
+					notice: "arxiv:2401.00009v2",
+					date: "2024-08-09",
+				},
+			],
+		});
+
+		// Mentioning an earlier withdrawal does not make this version withdrawn.
+		expect(status(first, byArxiv("2401.00010"))).toMatchObject({
+			state: "unknown",
+			positiveSupport: "allowed",
+			check: "not-covered",
+			updates: [],
+		});
+
+		// Within a day the same statuses are reused without asking Crossref again.
+		worker.advance(2 * 60 * 60);
+		await run();
+		expect(crossrefCalls()).toHaveLength(4);
+
+		// Days later W2 is retracted: the new snapshot shows it, and the earlier one keeps what
+		// it recorded while saying a newer status is known.
+		secondRetracted = true;
+		worker.advance(3 * 24 * 60 * 60);
+		const later = await run();
+		expect(crossrefCalls()).toHaveLength(8);
+		expect(status(later, byTitle("Recorded work W2"))).toMatchObject({
+			state: "retracted",
+			positiveSupport: "disallowed",
+			newerStatusKnown: false,
+		});
+		const reread = await researcher.literature.snapshot.query({
+			projectId,
+			snapshotId: first?.id ?? "",
+		});
+		expect(status(reread, byTitle("Recorded work W2"))).toMatchObject({
+			state: "corrected",
+			checkedAt,
+			newerStatusKnown: true,
+		});
+		expect(status(reread, byTitle("Recorded work W1"))).toMatchObject({
+			state: "retracted",
+			newerStatusKnown: false,
+		});
+	},
+);
+
+scenario(
+	"a Crossref outage or rate limit leaves statuses unknown rather than clear, says why, and pauses lookups for every project",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("crossref-failures"),
+		);
+		let mode: "outage" | "limited" = "outage";
+		const worker = providerWorker((url) => {
+			if (url.hostname === "api.openalex.org")
+				return json(openAlexPage([1, 2, 3, 4].map((n) => openAlexWork(n))));
+			const doi = decodeURIComponent(url.pathname.replace("/works/", ""));
+			if (mode === "limited")
+				return new Response("Too Many Requests", {
+					status: 429,
+					headers: { "retry-after": "120" },
+				});
+			return doi === "10.1234/recorded.1"
+				? crossrefJson(crossrefWork(doi))
+				: new Response("Service Unavailable", { status: 503 });
+		});
+		const crossrefCalls = () =>
+			worker.calls.filter(({ url }) => url.hostname === "api.crossref.org");
+		const run = async (projectId: string, options = worker.options) => {
+			const jobId = await search(researcher, projectId);
+			await workspace.runQueuedJobs(options);
+			return (await outcome(researcher, projectId, jobId)).snapshot;
+		};
+
+		const outage = await projectWithScope(researcher, {
+			queries: ["calibration"],
+			sources: ["openalex"],
+		});
+		const cutShort = await run(outage);
+		expect(cutShort?.statusCheck).toMatchObject({
+			outcome: "partial",
+			checked: 1,
+			unknown: 3,
+			errorClass: "source-error",
+		});
+		// W2 failed three times, the bounded retry limit, and the rest were not tried.
+		expect(crossrefCalls()).toHaveLength(4);
+		expect(
+			cutShort?.papers.map((p) => [
+				p.title,
+				p.publicationStatus.state,
+				p.publicationStatus.check,
+			]),
+		).toEqual([
+			["Recorded work W1", "no-known-updates", "checked"],
+			["Recorded work W2", "unknown", "failed"],
+			["Recorded work W3", "unknown", "failed"],
+			["Recorded work W4", "unknown", "failed"],
+		]);
+
+		mode = "limited";
+		worker.advance(2 * 24 * 60 * 60);
+		const limited = await run(outage);
+		expect(limited?.statusCheck).toMatchObject({
+			outcome: "failed",
+			checked: 0,
+			unknown: 4,
+			errorClass: "rate-limited",
+		});
+		expect(crossrefCalls()).toHaveLength(5);
+
+		const other = await projectWithScope(researcher, {
+			queries: ["domain shift"],
+			sources: ["openalex"],
+		});
+		const paused = await run(other);
+		expect(paused?.statusCheck).toMatchObject({
+			outcome: "failed",
+			errorClass: "rate-limited",
+		});
+		expect(crossrefCalls()).toHaveLength(5);
+
+		// A worker without a status source records that no check ran.
+		const { statusSource: _, ...unchecked } = worker.options;
+		const skipped = await run(other, unchecked);
+		expect(skipped?.statusCheck).toMatchObject({
+			outcome: "not-run",
+			errorClass: "not-configured",
+		});
+		expect(skipped?.papers[0]?.publicationStatus).toMatchObject({
+			state: "unknown",
+			positiveSupport: "allowed",
+			check: "not-run",
+		});
+	},
+);
+
+scenario(
+	"records alike only in title, authors and year become reviewable possible matches, and the researcher's decision never merges or rewrites them",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("possible-matches"),
+		);
+		const projectId = await projectWithScope(researcher, {
+			queries: ["robust tabular learning"],
+			sources: ["openalex"],
+		});
+		const person = (name: string) => ({
+			author: { id: `https://openalex.org/A-${name}`, display_name: name },
+		});
+		const titled = (
+			n: number,
+			title: string,
+			year: number,
+			authors: string[],
+		) =>
+			openAlexWork(n, {
+				display_name: title,
+				title,
+				publication_year: year,
+				publication_date: `${year}-02-01`,
+				authorships: authors.map(person),
+			});
+		let later = false;
+		const worker = providerWorker(() =>
+			json(
+				openAlexPage(
+					later
+						? [
+								titled(14, "Robust tabular learning: a benchmark study", 2024, [
+									"Ada Record",
+								]),
+								titled(15, "Robust tabluar learning", 2024, ["Ada Record"]),
+								titled(16, "Robust tabular learning for images", 2024, [
+									"Ada Record",
+								]),
+							]
+						: [
+								titled(10, "Robust tabular learning", 2024, [
+									"Ada Record",
+									"Ben Sample",
+								]),
+								titled(11, "Robust Tabular Learning.", 2025, ["A. Record"]),
+								titled(12, "Robust tabular learning", 2024, ["Zed Other"]),
+								titled(13, "Robust tabular learning", 2019, ["Ada Record"]),
+							],
+				),
+			),
+		);
+		const jobId = await search(researcher, projectId);
+		await workspace.runQueuedJobs(worker.options);
+		const { snapshot } = await outcome(researcher, projectId, jobId);
+		const idOf = (n: number) =>
+			snapshot?.papers.find((p) => p.identifiers.includes(`openalex:W${n}`))
+				?.id;
+		expect(snapshot?.paperCount).toBe(4);
+		expect(snapshot?.possibleMatches).toEqual([
+			{
+				id: expect.any(String),
+				paperIds: [idOf(10), idOf(11)],
+				inSnapshot: [true, true],
+				evidence: {
+					titles: ["Robust tabular learning", "Robust Tabular Learning."],
+					titleMatch: "same",
+					years: [2024, 2025],
+					sharedAuthors: ["record"],
+				},
+				decision: null,
+				revision: 0,
+				decidedAt: null,
+			},
+		]);
+		const [match] = snapshot?.possibleMatches ?? [];
+
+		const intruder = researcherFor(
+			workspace,
+			await workspace.signIn("possible-matches-intruder"),
+		);
+		await expect(
+			intruder.literature.decideMatch.mutate({
+				projectId,
+				matchId: match?.id ?? "",
+				decision: "same-work",
+				expectedRevision: 0,
+			}),
+		).rejects.toMatchObject({ data: { code: "NOT_FOUND" } });
+
+		const decided = await researcher.literature.decideMatch.mutate({
+			projectId,
+			matchId: match?.id ?? "",
+			decision: "same-work",
+			expectedRevision: 0,
+		});
+		expect(decided).toMatchObject({ decision: "same-work", revision: 1 });
+		await expect(
+			researcher.literature.decideMatch.mutate({
+				projectId,
+				matchId: match?.id ?? "",
+				decision: "different-works",
+				expectedRevision: 0,
+			}),
+		).rejects.toMatchObject({ data: { code: "CONFLICT" } });
+
+		const reread = await researcher.literature.snapshot.query({
+			projectId,
+			snapshotId: snapshot?.id ?? "",
+		});
+		expect(reread.paperCount).toBe(4);
+		expect(reread.papers.map((p) => p.identifiers)).toEqual(
+			snapshot?.papers.map((p) => p.identifiers),
+		);
+		expect(reread.possibleMatches).toEqual([
+			expect.objectContaining({
+				paperIds: [idOf(10), idOf(11)],
+				decision: "same-work",
+				revision: 1,
+				decidedAt: expect.any(String),
+			}),
+		]);
+
+		// A later search compares its papers with the project's earlier ones, allowing a
+		// subtitle or a small typo but never a title that only starts the same way.
+		later = true;
+		worker.advance(2 * 24 * 60 * 60);
+		const laterJob = await search(researcher, projectId);
+		await workspace.runQueuedJobs(worker.options);
+		const second = (await outcome(researcher, projectId, laterJob)).snapshot;
+		const laterId = (n: number) =>
+			second?.papers.find((p) => p.identifiers.includes(`openalex:W${n}`))?.id;
+		const pair = (
+			ids: [number, number],
+			titleMatch: string,
+			titles: [string, string],
+		) =>
+			expect.objectContaining({
+				paperIds: [laterId(ids[0]), idOf(ids[1])],
+				inSnapshot: [true, false],
+				evidence: expect.objectContaining({ titleMatch, titles }),
+			});
+		expect(second?.possibleMatches).toHaveLength(4);
+		expect(second?.possibleMatches).toEqual(
+			expect.arrayContaining([
+				pair([14, 10], "subtitle", [
+					"Robust tabular learning: a benchmark study",
+					"Robust tabular learning",
+				]),
+				pair([14, 11], "subtitle", [
+					"Robust tabular learning: a benchmark study",
+					"Robust Tabular Learning.",
+				]),
+				pair([15, 10], "near", [
+					"Robust tabluar learning",
+					"Robust tabular learning",
+				]),
+				pair([15, 11], "near", [
+					"Robust tabluar learning",
+					"Robust Tabular Learning.",
+				]),
+			]),
+		);
+	},
+);
+
+scenario(
+	"Crossref lookups are paced across concurrent workers and a transient failure is retried",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("crossref-pacing"),
+		);
+		let inFlight = 0;
+		let mostInFlight = 0;
+		let failedOnce = false;
+		const worker = providerWorker(async (url) => {
+			if (url.hostname === "api.openalex.org") {
+				const offset =
+					url.searchParams.get("search") === "calibration" ? 0 : 10;
+				return json(
+					openAlexPage([1, 2, 3].map((n) => openAlexWork(n + offset))),
+				);
+			}
+			inFlight++;
+			mostInFlight = Math.max(mostInFlight, inFlight);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			inFlight--;
+			const doi = decodeURIComponent(url.pathname.replace("/works/", ""));
+			if (doi === "10.1234/recorded.2" && !failedOnce) {
+				failedOnce = true;
+				return new Response("Service Unavailable", { status: 503 });
+			}
+			return crossrefJson(crossrefWork(doi));
+		});
+		const first = await projectWithScope(researcher, {
+			queries: ["calibration"],
+			sources: ["openalex"],
+		});
+		const second = await projectWithScope(researcher, {
+			queries: ["domain shift"],
+			sources: ["openalex"],
+		});
+		const firstJob = await search(researcher, first);
+		const secondJob = await search(researcher, second);
+		await Promise.all([
+			workspace.runNextJob(worker.options),
+			workspace.runNextJob(worker.options),
+		]);
+		const crossrefCalls = worker.calls.filter(
+			({ url }) => url.hostname === "api.crossref.org",
+		);
+		expect(crossrefCalls).toHaveLength(7);
+		expect(mostInFlight).toBe(1);
+		for (const [projectId, jobId] of [
+			[first, firstJob],
+			[second, secondJob],
+		] as const)
+			expect(
+				(await outcome(researcher, projectId, jobId)).snapshot?.statusCheck,
+			).toMatchObject({ outcome: "complete", checked: 3, unknown: 0 });
+		// Lookups are spaced for the whole deployment, and the retry backed off first.
+		expect(worker.sleeps).toContain(200);
+		expect(worker.sleeps).toContain(1_000);
+	},
+);

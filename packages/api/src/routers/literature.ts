@@ -6,14 +6,17 @@ import {
 	literatureScopeRevision,
 	literatureSnapshot,
 	paper,
+	paperMatch,
+	publicationStatus,
 	researchJob,
+	type SourceRecord,
 	snapshotPaper,
 	sourceExecution,
 } from "@blankfolio/db/schema/literature";
 import type { ResearchBrief } from "@blankfolio/db/schema/projects";
 import { briefRevision } from "@blankfolio/db/schema/projects";
 import { TRPCError } from "@trpc/server";
-import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, max, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { researchProcedure, router } from "../index";
 import {
@@ -21,10 +24,11 @@ import {
 	maxChargeMicros,
 	recordAliases,
 	type SourceSettings,
-	sourceAllocation,
+	sourceAllocations,
 	sourceAvailability,
 } from "../literature-sources";
 import { requireProject } from "../project-lifecycle";
+import { publicationStatusView } from "../publication-status";
 import { activeRunsPerAccount } from "../research-jobs";
 import { budgetStatus } from "../usage-budget";
 import { assertDiscoveryBrief, briefSchema } from "./projects";
@@ -76,13 +80,13 @@ export function proposeScope(
 		queries: [
 			...new Set([brief.topic.trim(), brief.title.trim()].filter(Boolean)),
 		].map((query) => query.slice(0, 2_000)),
-		sources: [
+		// Fixture-only setups must not propose a live provider.
+		sources:
 			settings.fixtureSources &&
 			(!literatureSources.openalex ||
 				sourceAvailability(literatureSources.openalex, settings).blockedBy)
-				? "fixture-catalog"
-				: "openalex",
-		],
+				? ["fixture-catalog"]
+				: ["openalex", "arxiv"],
 		dateFrom: from.toISOString().slice(0, 10),
 		dateTo: now.toISOString().slice(0, 10),
 		inclusionCriteria: "",
@@ -341,7 +345,7 @@ export const literatureRouter = router({
 						source,
 						{
 							queries: saved.scope.queries,
-							limit: sourceAllocation(saved.scope.sources.length),
+							limit: sourceAllocations(saved.scope.sources).allocation(id),
 							includeFoundations: saved.scope.includeFoundations,
 							routes,
 						},
@@ -514,44 +518,209 @@ export const literatureRouter = router({
 						source: snapshotPaper.source,
 						acquisitionReason: snapshotPaper.acquisitionReason,
 						observation: snapshotPaper.observation,
+						alsoObserved: snapshotPaper.alsoObserved,
+						statusCheck: snapshotPaper.statusCheck,
 					})
 					.from(snapshotPaper)
 					.innerJoin(paper, eq(paper.id, snapshotPaper.paperId))
 					.where(eq(snapshotPaper.snapshotId, input.snapshotId))
 					.orderBy(asc(snapshotPaper.rank));
+				const identifiers = (record: SourceRecord) =>
+					recordAliases(record).filter(
+						(alias) => !alias.startsWith("fixture:"),
+					);
+				// Related versions resolve only within this snapshot, so shared paper rows found by
+				// other projects are never revealed.
+				const inSnapshot = new Map<string, string>();
+				for (const row of rows)
+					for (const record of [
+						...(row.observation ? [row.observation] : []),
+						...row.alsoObserved.map((seen) => seen.record),
+					])
+						for (const alias of identifiers(record))
+							inSnapshot.set(alias, row.id);
+				const checkedDois = rows.flatMap((row) =>
+					row.statusCheck && "revision" in row.statusCheck
+						? [row.statusCheck.doi]
+						: [],
+				);
+				const latestRevisions = new Map(
+					checkedDois.length
+						? (
+								await tx
+									.select({
+										doi: publicationStatus.doi,
+										revision: max(publicationStatus.revision),
+									})
+									.from(publicationStatus)
+									.where(inArray(publicationStatus.doi, checkedDois))
+									.groupBy(publicationStatus.doi)
+							).map((row) => [row.doi, row.revision ?? 0])
+						: [],
+				);
 				// A snapshot shows what its source observed, not later corrections to the paper.
-				const papers = rows.map(({ observation, ...row }) => {
-					const seen = observation ?? { ...row, key: "" };
-					return {
-						id: row.id,
-						source: row.source,
-						acquisitionReason: row.acquisitionReason,
-						title: seen.title,
-						authors: seen.authors,
-						year: seen.year,
-						doi: seen.doi,
-						url: seen.url,
-						identifiers: observation
-							? recordAliases(observation).filter(
-									(alias) => !alias.startsWith("fixture:"),
+				const papers = rows.map(
+					({ observation, alsoObserved, statusCheck, ...row }) => {
+						const seen = observation ?? { ...row, key: "" };
+						return {
+							id: row.id,
+							source: row.source,
+							acquisitionReason: row.acquisitionReason,
+							title: seen.title,
+							authors: seen.authors,
+							year: seen.year,
+							doi: seen.doi,
+							url: seen.url,
+							identifiers: observation
+								? identifiers(observation)
+								: row.doi
+									? [`doi:${row.doi.toLowerCase()}`]
+									: [],
+							publicationDate: observation?.publicationDate ?? null,
+							preprint: observation?.preprint ?? null,
+							workType: observation?.workType ?? null,
+							abstractAvailable: observation?.abstractAvailable ?? false,
+							sourceUpdatedAt: observation?.sourceUpdatedAt ?? null,
+							version: observation?.version ?? null,
+							versionDate: observation?.versionDate ?? null,
+							relatedVersions: [
+								...(observation?.relatedVersions ?? []),
+								...(statusCheck && "relatedVersions" in statusCheck
+									? statusCheck.relatedVersions
+									: []),
+							]
+								.filter(
+									(related, index, all) =>
+										all.findIndex(
+											(other) => other.identifier === related.identifier,
+										) === index,
 								)
-							: row.doi
-								? [`doi:${row.doi.toLowerCase()}`]
-								: [],
-						publicationDate: observation?.publicationDate ?? null,
-						preprint: observation?.preprint ?? null,
-						workType: observation?.workType ?? null,
-						abstractAvailable: observation?.abstractAvailable ?? false,
-						sourceUpdatedAt: observation?.sourceUpdatedAt ?? null,
-					};
-				});
+								.map((related) => ({
+									note: null,
+									...related,
+									paperId: inSnapshot.get(related.identifier) ?? null,
+								})),
+							publicationStatus: publicationStatusView(
+								statusCheck,
+								[
+									observation,
+									...alsoObserved.map((seen) => seen.record),
+								].flatMap((record) => record?.updates ?? []),
+								statusCheck && "doi" in statusCheck
+									? latestRevisions.get(statusCheck.doi)
+									: undefined,
+							),
+							alsoObserved: alsoObserved.map(({ source, record }) => ({
+								source,
+								title: record.title,
+								url: record.url,
+								identifiers: identifiers(record),
+								version: record.version ?? null,
+								versionDate: record.versionDate ?? null,
+								preprint: record.preprint ?? null,
+								abstractAvailable: record.abstractAvailable ?? false,
+							})),
+						};
+					},
+				);
+				const rank = new Map(papers.map((row, index) => [row.id, index]));
+				const paperIdList = [...rank.keys()];
+				// A match may reach a paper kept only by an earlier snapshot of this project.
+				const matches = paperIdList.length
+					? await tx
+							.select()
+							.from(paperMatch)
+							.where(
+								and(
+									eq(paperMatch.projectId, input.projectId),
+									or(
+										inArray(paperMatch.paperId, paperIdList),
+										inArray(paperMatch.otherPaperId, paperIdList),
+									),
+								),
+							)
+					: [];
+				const order = (id: string) => rank.get(id) ?? paperIdList.length;
 				return {
 					...snapshot.snapshot,
 					scope: snapshot.scope,
 					sources: await sourceOutcomes(tx, snapshot.snapshot.jobId),
 					papers,
+					possibleMatches: matches
+						.map((match) => {
+							// Papers in this snapshot come first, in snapshot order.
+							const swap = order(match.paperId) > order(match.otherPaperId);
+							const flip = <T>([one, other]: [T, T]): [T, T] =>
+								swap ? [other, one] : [one, other];
+							const paperIds = flip([match.paperId, match.otherPaperId]);
+							return {
+								id: match.id,
+								paperIds,
+								inSnapshot: paperIds.map((id) => rank.has(id)),
+								evidence: {
+									...match.evidence,
+									titles: flip(match.evidence.titles),
+									years: flip(match.evidence.years),
+								},
+								decision: match.decision,
+								revision: match.revision,
+								decidedAt: match.decidedAt,
+							};
+						})
+						.sort(
+							(a, b) =>
+								order(a.paperIds[0]) - order(b.paperIds[0]) ||
+								order(a.paperIds[1]) - order(b.paperIds[1]) ||
+								a.id.localeCompare(b.id),
+						),
 				};
 			}, readOnly),
+		),
+	decideMatch: researchProcedure
+		.input(
+			projectRef.extend({
+				matchId: z.string().uuid(),
+				decision: z.enum(["same-work", "different-works"]),
+				expectedRevision: z.number().int().min(0),
+			}),
+		)
+		.mutation(({ ctx, input }) =>
+			ctx.db.transaction(async (tx) => {
+				await requireProject(tx, ctx.session.user.id, input.projectId, "write");
+				const mine = and(
+					eq(paperMatch.id, input.matchId),
+					eq(paperMatch.projectId, input.projectId),
+				);
+				const [decided] = await tx
+					.update(paperMatch)
+					.set({
+						decision: input.decision,
+						revision: input.expectedRevision + 1,
+						decidedAt: new Date(),
+					})
+					.where(and(mine, eq(paperMatch.revision, input.expectedRevision)))
+					.returning({
+						id: paperMatch.id,
+						decision: paperMatch.decision,
+						revision: paperMatch.revision,
+						decidedAt: paperMatch.decidedAt,
+					});
+				if (decided) return decided;
+				const [exists] = await tx
+					.select({ id: paperMatch.id })
+					.from(paperMatch)
+					.where(mine);
+				throw exists
+					? new TRPCError({
+							code: "CONFLICT",
+							message:
+								"This possible match was decided in another tab. Reload it before deciding again.",
+						})
+					: new TRPCError({
+							code: "NOT_FOUND",
+							message: "Possible match not found",
+						});
+			}),
 		),
 	budget: researchProcedure.input(projectRef).query(({ ctx, input }) =>
 		ctx.db.transaction(async (tx) => {
@@ -568,7 +737,7 @@ export const literatureRouter = router({
 								source,
 								{
 									queries: ["one query"],
-									limit: sourceAllocation(1),
+									limit: sourceAllocations([entry.id]).allocation(entry.id),
 									includeFoundations: true,
 									routes: sourceAvailability(source, ctx.sourceSettings).routes,
 								},

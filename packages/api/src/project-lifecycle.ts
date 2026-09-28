@@ -2,6 +2,7 @@ import type { Database, Transaction } from "@blankfolio/db";
 import {
 	literatureScopeRevision,
 	literatureSnapshot,
+	paperMatch,
 	researchJob,
 	sourceResponseCache,
 	usageReservation,
@@ -70,6 +71,7 @@ export function createProjectCleanupRegistry(
 				await tx
 					.delete(sourceResponseCache)
 					.where(eq(sourceResponseCache.projectId, id));
+				await tx.delete(paperMatch).where(eq(paperMatch.projectId, id));
 			},
 		},
 		...additional,

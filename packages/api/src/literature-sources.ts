@@ -4,6 +4,7 @@ import type {
 	SourceRecord,
 } from "@blankfolio/db/schema/literature";
 import { z } from "zod";
+import { createArxivSource } from "./arxiv";
 import { createOpenAlexSource } from "./openalex";
 import { TransientSourceError, UncertainSourceOutcome } from "./source-errors";
 
@@ -15,11 +16,20 @@ export {
 } from "./source-errors";
 
 export const recordCap = 200;
-/** Held back from every discovery run for the later arXiv and status stages. */
-export const laterStageReserve = 40;
-/** Records each selected source may contribute; the reserve is never allocated. */
-export const sourceAllocation = (sourceCount: number) =>
-	Math.floor((recordCap - laterStageReserve) / sourceCount);
+/** arXiv's share of the cap for recent preprints; without arXiv beside another source it stays unallocated. */
+export const arxivReserve = 40;
+/** So no source takes the whole cap, the others split what arXiv's reserve leaves equally. */
+export function sourceAllocations(sourceIds: string[]) {
+	const reserveUsed = sourceIds.length > 1 && sourceIds.includes("arxiv");
+	const shared = reserveUsed
+		? sourceIds.filter((id) => id !== "arxiv")
+		: sourceIds;
+	const each = Math.floor((recordCap - arxivReserve) / shared.length);
+	return {
+		reserved: reserveUsed ? 0 : arxivReserve,
+		allocation: (id: string) => (shared.includes(id) ? each : arxivReserve),
+	};
+}
 /** Cached provider responses older than this are deleted and never served, even as stale. */
 export const responseCacheRetentionSeconds = 7 * 24 * 60 * 60;
 
@@ -50,6 +60,8 @@ export type SourceRequest = {
 	/** Paid routes with a configured price; the source must not call any other paid route. */
 	routes: string[];
 	cache: SourceCache;
+	/** Runs one provider request as the deployment's only one, spaced by `minIntervalSeconds`. */
+	pace: <T>(request: () => Promise<T>) => Promise<T>;
 };
 export type SourceResult = {
 	outcome: "succeeded" | "empty" | "partial";
@@ -80,6 +92,8 @@ export type LiteratureSource = {
 	quotaRequired: boolean;
 	/** Returns fabricated records; offered only where fixture sources are enabled. */
 	fixture?: boolean;
+	/** Provider terms allow one connection at a time with this gap, across every worker. */
+	minIntervalSeconds?: number;
 	filters: (
 		scope: LiteratureScope,
 		routes: string[],
@@ -204,6 +218,7 @@ export const literatureSources: Record<string, LiteratureSource> = {
 	),
 	/** Without credentials it fails visibly; the worker supplies a configured instance. */
 	openalex: createOpenAlexSource({}),
+	arxiv: createArxivSource({}),
 };
 
 /** Micro-dollars per request on each paid route; a source whose required route is unpriced is disabled. */
