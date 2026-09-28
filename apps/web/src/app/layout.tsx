@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Newsreader } from "next/font/google";
 
 import "../index.css";
 import Header from "@/components/header";
@@ -15,6 +15,12 @@ const geistMono = Geist_Mono({
 	subsets: ["latin"],
 });
 
+const newsreader = Newsreader({
+	variable: "--font-newsreader",
+	subsets: ["latin"],
+	axes: ["opsz"],
+});
+
 export const metadata: Metadata = {
 	title: "blankfolio",
 	description: "blankfolio",
@@ -28,7 +34,7 @@ export default function RootLayout({
 	return (
 		<html lang="en" suppressHydrationWarning>
 			<body
-				className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+				className={`${geistSans.variable} ${geistMono.variable} ${newsreader.variable} antialiased`}
 			>
 				<Providers>
 					<div className="grid grid-rows-[auto_1fr] h-svh">
