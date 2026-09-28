@@ -1,0 +1,27 @@
+[Unit]
+Description=blankfolio literature worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=blankfolio
+Group=blankfolio
+# Varlock reads .env.schema from the working directory and runs the varlock CLI found in node_modules/.bin.
+WorkingDirectory=/opt/blankfolio/apps/worker
+# Written by scripts/set-worker-env.sh: root-owned, mode 600, values in single quotes.
+EnvironmentFile=/etc/blankfolio-worker.env
+Environment=NODE_ENV=production
+Environment=VARLOCK_TELEMETRY_DISABLED=1
+# The VM has 1 GB of memory, shared with the varlock child process at startup and sshd.
+ExecStart=/usr/bin/node --max-old-space-size=384 dist/start.mjs
+# On SIGTERM the worker lets in-flight searches finish for up to 30 seconds, then closes its pools.
+TimeoutStopSec=45
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

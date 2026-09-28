@@ -41,7 +41,7 @@ Three distinct schemas, each loaded by Varlock from its own directory:
 | Process | Schema | Variables |
 | --- | --- | --- |
 | API (`apps/server`) | `apps/server/.env.schema` | Existing auth/database variables plus optional `LITERATURE_SOURCE_PRICES` (JSON, USD per request per route, e.g. `{"fixture-metered":0.02}`) and, since #10, `LITERATURE_SOURCE_QUOTAS`. The API enqueues through its request pool and never polls for jobs; after its first enqueue pg-boss refreshes its queue cache every 60 seconds, logging `job_queue_error` if that fails. |
-| Worker (`apps/worker`) | `apps/worker/.env.schema` | `DATABASE_URL` for the worker role (direct, non-pooler Neon connection), `LITERATURE_SOURCE_PRICES` and `LITERATURE_SOURCE_QUOTAS` (must match the API), `OPENALEX_API_KEY` (#10), and `DATABASE_MIGRATION_URL` only for `queue:migrate`. No auth secrets. |
+| Worker (`apps/worker`) | `apps/worker/.env.schema` | `DATABASE_URL` for the worker role (direct, non-pooler Neon connection), `LITERATURE_SOURCE_PRICES` and `LITERATURE_SOURCE_QUOTAS` (must match the API), `OPENALEX_API_KEY` (#10), `WORKER_POLL_INTERVAL_SECONDS` (idle queue poll; 30 in production, 2 otherwise), and `DATABASE_MIGRATION_URL` only for `queue:migrate`. No auth secrets. |
 | Migrations | `packages/db/.env.schema` and the worker's `DATABASE_MIGRATION_URL` | `pnpm db:migrate` applies `20260927114150_literature_search`; `pnpm --filter worker queue:migrate` installs or upgrades the pg-boss schema (`pgboss`) and creates the `literature-search` queue. Both need a role that can run DDL. |
 
 The worker role needs read/write on the application tables and on the `pgboss` schema; it does not need DDL. It holds two pools: the application pool from `createDb(config, { persistent: true })` (up to five connections) and pg-boss's own pool (up to three). Both are closed on `SIGINT`/`SIGTERM` after in-flight handlers finish (30-second grace).
@@ -52,7 +52,7 @@ The worker is a persistent Node 22.12+ process and is **not** a Vercel service; 
 
 - Local: `pnpm dev:worker` (runs `tsx watch` with `apps/worker/.env`). Starting it requires permission, like any server.
 - Build: `pnpm --filter worker build` produces `apps/worker/dist/start.mjs` and `dist/migrate.mjs`, bundling the workspace packages and their dependencies; only `varlock` stays external, and `.env.schema` must sit in the working directory.
-- Run: `pnpm --filter worker start` (or `node dist/start.mjs` from `apps/worker`) on any host that keeps a long-running process, for example a container or VM, reaching the same PostgreSQL database as the API.
+- Run: `pnpm --filter worker start` (or `node dist/start.mjs` from `apps/worker`) on any host that keeps a long-running process, for example a container or VM, reaching the same PostgreSQL database as the API. The production worker runs on a free Google Cloud VM: `docs/operations/worker-gcp-runbook.md`.
 
 Deployment order: `pnpm db:migrate`, then `pnpm --filter worker queue:migrate`, then the worker, then the API. Until the queue is installed, submissions fail with the generic error and nothing is saved.
 
