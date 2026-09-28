@@ -9,6 +9,7 @@ import {
 	createJobQueue,
 	literatureSearchQueue,
 	literatureWorkOptions,
+	reconcileAbandonedSearches,
 } from "@blankfolio/api/research-jobs";
 import type { AppRouter } from "@blankfolio/api/routers/index";
 import {
@@ -582,6 +583,101 @@ scenario(
 		await workspace.runQueuedJobs();
 		expect(await submit(first, three)).toMatchObject({ state: "queued" });
 		await workspace.runQueuedJobs();
+	},
+);
+
+scenario(
+	"searches the queue gave up on are failed and free their slots, while live searches are untouched",
+	async (workspace) => {
+		const researcher = client(workspace, await workspace.signIn("abandoned"));
+		const reconcile = () =>
+			reconcileAbandonedSearches(workspace.db, workspace.boss);
+		const exhausted = await readyProject(researcher, "Exhausted");
+		await saveScope(researcher, exhausted, { sources: ["fixture-metered"] });
+		const exhaustedJob = await submit(researcher, exhausted);
+		await workspace.runNextJob({
+			sources: hookedSources({
+				"fixture-metered": () => {
+					throw new Error("worker process stopped after dispatch");
+				},
+			}),
+		});
+		// The queue spends the remaining attempts without the handler running again.
+		for (;;) {
+			const jobs = await workspace.boss.fetch(literatureSearchQueue, {
+				ignoreStartAfter: true,
+			});
+			if (!jobs.length) break;
+			await workspace.boss.fail(
+				literatureSearchQueue,
+				jobs.map((job) => job.id),
+			);
+		}
+		const live = await readyProject(researcher, "Live");
+		await saveScope(researcher, live);
+		const liveJob = await submit(researcher, live);
+		const missing = await readyProject(researcher, "Missing");
+		await saveScope(researcher, missing);
+		await expect(submit(researcher, missing)).rejects.toMatchObject({
+			data: { code: "TOO_MANY_REQUESTS" },
+		});
+
+		expect(await reconcile()).toEqual([exhaustedJob.id]);
+		expect(
+			await researcher.literature.job.query({
+				projectId: exhausted,
+				jobId: exhaustedJob.id,
+			}),
+		).toMatchObject({
+			state: "failed",
+			stage: "done",
+			errorClass: "abandoned",
+			snapshotId: null,
+		});
+		expect(
+			(
+				await workspace.db.$client.query(
+					"SELECT state FROM usage_reservation WHERE job_id = $1",
+					[exhaustedJob.id],
+				)
+			).rows,
+		).toEqual([{ state: "held" }]);
+		expect(
+			(await researcher.literature.budget.query({ projectId: exhausted }))
+				.projectCommittedMicros,
+		).toBe(40_000);
+
+		const missingJob = await submit(researcher, missing);
+		expect(missingJob).toMatchObject({ state: "queued" });
+		const entries = await workspace.boss.findJobs(literatureSearchQueue, {
+			data: { jobId: missingJob.id },
+		});
+		await workspace.boss.deleteJob(
+			literatureSearchQueue,
+			entries.map((entry) => entry.id),
+		);
+		let duringRun: string[] | undefined;
+		await workspace.runQueuedJobs({
+			sources: hookedSources({
+				"fixture-catalog": async () => {
+					duringRun ??= await reconcile();
+				},
+			}),
+		});
+		expect(duringRun).toEqual([missingJob.id]);
+		expect(
+			await researcher.literature.job.query({
+				projectId: live,
+				jobId: liveJob.id,
+			}),
+		).toMatchObject({ state: "succeeded" });
+		expect(
+			await researcher.literature.job.query({
+				projectId: missing,
+				jobId: missingJob.id,
+			}),
+		).toMatchObject({ state: "failed", errorClass: "abandoned" });
+		expect(await reconcile()).toEqual([]);
 	},
 );
 
