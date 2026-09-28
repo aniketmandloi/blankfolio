@@ -3,12 +3,13 @@
 import { Button } from "@blankfolio/ui/components/button";
 import { Input } from "@blankfolio/ui/components/input";
 import { Label } from "@blankfolio/ui/components/label";
+import { Skeleton } from "@blankfolio/ui/components/skeleton";
 import {
 	useInfiniteQuery,
 	useMutation,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { Archive, Plus, RotateCcw } from "lucide-react";
+import { Archive, ArrowRight, Plus, RotateCcw } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -199,8 +200,11 @@ export default function Dashboard() {
 					)}
 
 					{projectList.isPending ? (
-						<div className="empty-shelf" aria-live="polite">
-							<p>Loading projects…</p>
+						<div className="shelf-loading" aria-live="polite">
+							<p className="sr-only">Loading projects…</p>
+							<Skeleton className="h-14" />
+							<Skeleton className="h-14" />
+							<Skeleton className="h-14" />
 						</div>
 					) : projectList.isError ? (
 						<div className="empty-shelf error-shelf" role="alert">
@@ -242,6 +246,11 @@ export default function Dashboard() {
 											href={`/projects/${project.id}`}
 										>
 											{project.title || "Untitled research project"}
+											<ArrowRight
+												className="row-arrow"
+												size={16}
+												aria-hidden="true"
+											/>
 										</Link>
 										<p className="project-meta">
 											Revision {project.revision}{" "}
