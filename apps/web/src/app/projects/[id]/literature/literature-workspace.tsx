@@ -152,19 +152,15 @@ function SnapshotView({
 		);
 	return (
 		<section className="history-panel" aria-labelledby="snapshot-heading">
-			<div className="panel-heading history-heading">
-				<div>
-					<p className="eyebrow">
-						Literature Snapshot · scope revision {snapshot.scopeRevision}
-					</p>
-					<h2 id="snapshot-heading">
-						Searched{" "}
-						<time dateTime={new Date(snapshot.createdAt).toISOString()}>
-							{formatDate(snapshot.createdAt)}
-						</time>
-					</h2>
-				</div>
-			</div>
+			<h2 id="snapshot-heading">
+				Searched{" "}
+				<time dateTime={new Date(snapshot.createdAt).toISOString()}>
+					{formatDate(snapshot.createdAt)}
+				</time>
+			</h2>
+			<p className="field-caption">
+				Literature Snapshot from scope revision {snapshot.scopeRevision}
+			</p>
 			<p className="field-caption">
 				{snapshot.coverage === "partial"
 					? "Partial coverage: at least one source failed, answered partially or was truncated. Review each source below."
@@ -372,19 +368,14 @@ export default function LiteratureWorkspace({ id }: { id: string }) {
 				</Link>
 				<header className="detail-heading">
 					<div>
-						<p className="eyebrow">
-							Literature
-							<span aria-hidden="true"> · </span>
-							{base.revision
-								? `Scope revision ${base.revision}`
-								: "Proposed scope"}
-						</p>
 						<h1 className="display-title detail-title">
 							{project.title || "Untitled research project"}
 						</h1>
 						<p className="page-intro">
-							Declare the boundaries of a search, run it in the background and
-							inspect exactly what each source returned.
+							Literature ·{" "}
+							{base.revision
+								? `Scope revision ${base.revision}`
+								: "Proposed scope"}
 						</p>
 					</div>
 				</header>
@@ -392,16 +383,12 @@ export default function LiteratureWorkspace({ id }: { id: string }) {
 				<div className="detail-layout">
 					<div className="detail-primary-column">
 						<section className="brief-panel" aria-labelledby="scope-heading">
-							<div className="panel-heading">
-								<div>
-									<p className="eyebrow">
-										{base.proposed
-											? "Proposed from the brief's topic and title"
-											: `Based on brief revision ${base.briefRevision}`}
-									</p>
-									<h2 id="scope-heading">Literature Scope</h2>
-								</div>
-							</div>
+							<h2 id="scope-heading">Literature Scope</h2>
+							<p className="field-caption">
+								{base.proposed
+									? "Proposed from the brief's topic and title."
+									: `Based on brief revision ${base.briefRevision}.`}
+							</p>
 							<form className="brief-form" onSubmit={submitScope}>
 								<fieldset
 									className="brief-fieldset"
@@ -526,7 +513,7 @@ export default function LiteratureWorkspace({ id }: { id: string }) {
 											/>
 										</div>
 									</div>
-									<p className="field-caption field-hint">
+									<p className="field-caption">
 										The default window is the previous five years through today
 										(UTC).
 									</p>
@@ -623,12 +610,10 @@ export default function LiteratureWorkspace({ id }: { id: string }) {
 						</section>
 
 						<section className="history-panel" aria-labelledby="jobs-heading">
-							<div className="panel-heading history-heading">
-								<div>
-									<p className="eyebrow">Runs continue after you leave</p>
-									<h2 id="jobs-heading">Searches</h2>
-								</div>
-							</div>
+							<h2 id="jobs-heading">Searches</h2>
+							<p className="field-caption">
+								Searches keep running after you leave this page.
+							</p>
 							{!briefReady && (
 								<p className="field-caption">
 									Save a working title and topic in the{" "}
@@ -770,10 +755,10 @@ export default function LiteratureWorkspace({ id }: { id: string }) {
 							className="project-actions-panel"
 							aria-labelledby="budget-heading"
 						>
-							<p className="eyebrow">
-								Spending · {budgetQuery.data?.period ?? "this month"} (UTC)
-							</p>
 							<h2 id="budget-heading">Budget status</h2>
+							<p className="field-caption">
+								{budgetQuery.data?.period ?? "This month"} (UTC)
+							</p>
 							{budgetQuery.data ? (
 								<dl className="revision-fields">
 									<div>
