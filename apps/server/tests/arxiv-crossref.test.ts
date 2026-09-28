@@ -746,7 +746,8 @@ scenario(
 			unknown: 3,
 			errorClass: "source-error",
 		});
-		expect(crossrefCalls()).toHaveLength(2);
+		// W2 failed three times, the bounded retry limit, and the rest were not tried.
+		expect(crossrefCalls()).toHaveLength(4);
 		expect(
 			cutShort?.papers.map((p) => [
 				p.title,
@@ -769,7 +770,7 @@ scenario(
 			unknown: 4,
 			errorClass: "rate-limited",
 		});
-		expect(crossrefCalls()).toHaveLength(3);
+		expect(crossrefCalls()).toHaveLength(5);
 
 		const other = await projectWithScope(researcher, {
 			queries: ["domain shift"],
@@ -780,7 +781,7 @@ scenario(
 			outcome: "failed",
 			errorClass: "rate-limited",
 		});
-		expect(crossrefCalls()).toHaveLength(3);
+		expect(crossrefCalls()).toHaveLength(5);
 
 		// A worker without a status source records that no check ran.
 		const { statusSource: _, ...unchecked } = worker.options;
@@ -904,5 +905,66 @@ scenario(
 				decidedAt: expect.any(String),
 			}),
 		]);
+	},
+);
+
+scenario(
+	"Crossref lookups are paced across concurrent workers and a transient failure is retried",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("crossref-pacing"),
+		);
+		let inFlight = 0;
+		let mostInFlight = 0;
+		let failedOnce = false;
+		const worker = providerWorker(async (url) => {
+			if (url.hostname === "api.openalex.org") {
+				const offset =
+					url.searchParams.get("search") === "calibration" ? 0 : 10;
+				return json(
+					openAlexPage([1, 2, 3].map((n) => openAlexWork(n + offset))),
+				);
+			}
+			inFlight++;
+			mostInFlight = Math.max(mostInFlight, inFlight);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			inFlight--;
+			const doi = decodeURIComponent(url.pathname.replace("/works/", ""));
+			if (doi === "10.1234/recorded.2" && !failedOnce) {
+				failedOnce = true;
+				return new Response("Service Unavailable", { status: 503 });
+			}
+			return crossrefJson(crossrefWork(doi));
+		});
+		const first = await projectWithScope(researcher, {
+			queries: ["calibration"],
+			sources: ["openalex"],
+		});
+		const second = await projectWithScope(researcher, {
+			queries: ["domain shift"],
+			sources: ["openalex"],
+		});
+		const firstJob = await search(researcher, first);
+		const secondJob = await search(researcher, second);
+		await Promise.all([
+			workspace.runNextJob(worker.options),
+			workspace.runNextJob(worker.options),
+		]);
+		const crossrefCalls = worker.calls.filter(
+			({ url }) => url.hostname === "api.crossref.org",
+		);
+		expect(crossrefCalls).toHaveLength(7);
+		expect(mostInFlight).toBe(1);
+		for (const [projectId, jobId] of [
+			[first, firstJob],
+			[second, secondJob],
+		] as const)
+			expect(
+				(await outcome(researcher, projectId, jobId)).snapshot?.statusCheck,
+			).toMatchObject({ outcome: "complete", checked: 3, unknown: 0 });
+		// Lookups are spaced for the whole deployment, and the retry backed off first.
+		expect(worker.sleeps).toContain(200);
+		expect(worker.sleeps).toContain(1_000);
 	},
 );

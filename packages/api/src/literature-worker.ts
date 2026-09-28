@@ -333,7 +333,7 @@ export function createLiteratureWorker({
 	 * Serialises a source's requests across every worker with a transaction-scoped advisory lock,
 	 * starting each no sooner than `minIntervalSeconds` after the previous one finished.
 	 */
-	function pacer(source: LiteratureSource) {
+	function pacer(source: { id: string; minIntervalSeconds?: number }) {
 		const interval = source.minIntervalSeconds;
 		return <T>(request: () => Promise<T>): Promise<T> =>
 			interval
@@ -639,7 +639,7 @@ export function createLiteratureWorker({
 			),
 		];
 		const known = await latestStatuses(db, dois);
-		let requested = false;
+		const pace = pacer(statusSource);
 		for (const doi of dois) {
 			const latest = known.get(doi);
 			if (
@@ -648,17 +648,23 @@ export function createLiteratureWorker({
 					statusFreshSeconds * 1000
 			)
 				continue;
-			if (!(await claim(jobId))) return null;
-			if (await pausedFor(statusSource.id))
-				return { errorClass: "rate-limited" };
-			if (requested) await sleep(statusSource.minIntervalSeconds * 1000);
-			requested = true;
-			const answer = await statusSource.lookup(doi);
-			if (answer.outcome === "failed") {
-				if (answer.retryAfterSeconds)
-					await pause(statusSource.id, answer.retryAfterSeconds);
-				return { errorClass: answer.errorClass };
+			let answer: StatusLookup | undefined;
+			for (let attempt = 1; attempt <= maxSourceAttempts; attempt++) {
+				if (!(await claim(jobId))) return null;
+				if ((await pausedFor(statusSource.id)) > maxRetryAfterSeconds * 1000)
+					return { errorClass: "rate-limited" };
+				answer = await pace(() => statusSource.lookup(doi));
+				if (answer.outcome !== "failed") break;
+				const wait = answer.retryAfterSeconds ?? 0;
+				if (wait > maxRetryAfterSeconds) {
+					await pause(statusSource.id, wait);
+					break;
+				}
+				if (!answer.retryable || attempt === maxSourceAttempts) break;
+				await sleep(Math.max(wait * 1000, 1000 * 2 ** (attempt - 1)));
 			}
+			if (!answer || answer.outcome === "failed")
+				return { errorClass: answer?.errorClass ?? "source-unavailable" };
 			await recordStatus(doi, answer);
 		}
 		return { errorClass: null };

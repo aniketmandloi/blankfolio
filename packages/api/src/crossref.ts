@@ -11,14 +11,20 @@ export type StatusLookup =
 			relatedVersions: RelatedVersion[];
 	  }
 	| { outcome: "not-registered" }
-	| { outcome: "failed"; errorClass: string; retryAfterSeconds?: number };
+	| {
+			outcome: "failed";
+			errorClass: string;
+			/** Nothing suggests the same request would fail again. */
+			retryable: boolean;
+			retryAfterSeconds?: number;
+	  };
 
 /** Looks up what a registration agency knows about a DOI's corrections, retractions and versions. */
 export type PublicationStatusSource = {
 	id: string;
 	/** Whether this agency registers the DOI at all; others are never sent. */
 	covers: (doi: string) => boolean;
-	/** The shortest gap between this worker's lookups. */
+	/** The shortest gap between lookups across every worker. */
 	minIntervalSeconds: number;
 	lookup: (doi: string) => Promise<StatusLookup>;
 };
@@ -90,19 +96,32 @@ export function createCrossrefStatus({
 					return {
 						outcome: "failed",
 						errorClass: "rate-limited",
+						retryable: true,
 						retryAfterSeconds: waitSeconds(response.headers),
 					};
 				if (response.status >= 500)
-					return { outcome: "failed", errorClass: "source-error" };
+					return {
+						outcome: "failed",
+						errorClass: "source-error",
+						retryable: true,
+					};
 				if (!response.ok)
-					return { outcome: "failed", errorClass: "request-rejected" };
+					return {
+						outcome: "failed",
+						errorClass: "request-rejected",
+						retryable: false,
+					};
 				body = await response.json();
 			} catch {
-				return { outcome: "failed", errorClass: "timeout" };
+				return { outcome: "failed", errorClass: "timeout", retryable: true };
 			}
 			const work = workSchema.safeParse(body);
 			if (!work.success)
-				return { outcome: "failed", errorClass: "invalid-response" };
+				return {
+					outcome: "failed",
+					errorClass: "invalid-response",
+					retryable: false,
+				};
 			const { message } = work.data;
 			return {
 				outcome: "checked",
