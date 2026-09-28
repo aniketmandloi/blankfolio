@@ -27,7 +27,8 @@
 			"!**/wrangler.jsonc",
 			"!**/.source",
 			"!**/convex/_generated",
-			"!**/src/env.ts"
+			"!**/src/env.ts",
+			"!packages/db/src/migrations"
 		]
 	},
 	"formatter": {
