@@ -10,16 +10,20 @@ import { createDb } from "@blankfolio/db";
 import { ENV } from "./env.server";
 
 const db = createDb(ENV, { persistent: true });
-const stop = await runLiteratureWorker(ENV.DATABASE_URL, {
-	db,
-	prices: parseSourcePrices(ENV.LITERATURE_SOURCE_PRICES),
-	quotas: parseSourceQuotas(ENV.LITERATURE_SOURCE_QUOTAS),
-	fixtureSources: ENV.LITERATURE_FIXTURE_SOURCES === true,
-	sources: {
-		...literatureSources,
-		openalex: createOpenAlexSource({ apiKey: ENV.OPENALEX_API_KEY }),
+const stop = await runLiteratureWorker(
+	ENV.DATABASE_URL,
+	{
+		db,
+		prices: parseSourcePrices(ENV.LITERATURE_SOURCE_PRICES),
+		quotas: parseSourceQuotas(ENV.LITERATURE_SOURCE_QUOTAS),
+		fixtureSources: ENV.LITERATURE_FIXTURE_SOURCES === true,
+		sources: {
+			...literatureSources,
+			openalex: createOpenAlexSource({ apiKey: ENV.OPENALEX_API_KEY }),
+		},
 	},
-});
+	ENV.WORKER_POLL_INTERVAL_SECONDS,
+);
 console.log("literature_worker_started");
 for (const signal of ["SIGINT", "SIGTERM"] as const)
 	process.once(signal, () => {

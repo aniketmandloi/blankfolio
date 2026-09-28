@@ -653,10 +653,11 @@ export function createLiteratureJobHandler(options: LiteratureWorkerOptions) {
 export function startLiteratureWorker(
 	boss: PgBoss,
 	options: LiteratureWorkerOptions,
+	pollingIntervalSeconds: number,
 ) {
 	return boss.work(
 		literatureSearchQueue,
-		literatureWorkOptions,
+		{ ...literatureWorkOptions, pollingIntervalSeconds },
 		createLiteratureJobHandler(options),
 	);
 }
@@ -665,10 +666,11 @@ export function startLiteratureWorker(
 export async function runLiteratureWorker(
 	connectionString: string,
 	options: LiteratureWorkerOptions,
+	pollingIntervalSeconds: number,
 ) {
 	const boss = new PgBoss({ connectionString, max: 3, migrate: false });
 	boss.on("error", (error) => console.error("job_queue_error", error.message));
 	await boss.start();
-	await startLiteratureWorker(boss, options);
+	await startLiteratureWorker(boss, options, pollingIntervalSeconds);
 	return () => boss.stop({ graceful: true, timeout: 30_000 });
 }
