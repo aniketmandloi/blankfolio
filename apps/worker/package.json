@@ -1,0 +1,24 @@
+{
+	"name": "worker",
+	"type": "module",
+	"scripts": {
+		"build": "tsdown",
+		"check-types": "tsc --noEmit",
+		"watch": "tsx watch src/start.ts",
+		"start": "node dist/start.mjs",
+		"queue:migrate": "tsx src/migrate.ts",
+		"env:generate": "varlock codegen"
+	},
+	"dependencies": {
+		"@blankfolio/api": "workspace:*",
+		"@blankfolio/db": "workspace:*",
+		"varlock": "catalog:"
+	},
+	"devDependencies": {
+		"@blankfolio/config": "workspace:*",
+		"@types/node": "catalog:",
+		"tsdown": "^0.23.0",
+		"tsx": "catalog:",
+		"typescript": "^6.0.3"
+	}
+}

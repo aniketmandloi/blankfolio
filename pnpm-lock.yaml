@@ -358,6 +358,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.3
+      pg-boss:
+        specifier: ^12.34.0
+        version: 12.34.0
       tsdown:
         specifier: ^0.23.0
         version: 0.23.0(tsx@4.23.15)(typescript@6.0.3)
@@ -459,6 +462,34 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  apps/worker:
+    dependencies:
+      '@blankfolio/api':
+        specifier: workspace:*
+        version: link:../../packages/api
+      '@blankfolio/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      varlock:
+        specifier: 'catalog:'
+        version: 1.18.0
+    devDependencies:
+      '@blankfolio/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.3
+      tsdown:
+        specifier: ^0.23.0
+        version: 0.23.0(tsx@4.23.15)(typescript@6.0.3)
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.15
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   packages/api:
     dependencies:
       '@blankfolio/auth':
@@ -476,6 +507,9 @@ importers:
       drizzle-orm:
         specifier: 'catalog:'
         version: 1.0.0-rc.4(@neondatabase/serverless@1.1.0)(@types/pg@8.23.1)(pg@8.23.0)(zod@4.6.5)
+      pg-boss:
+        specifier: ^12.34.0
+        version: 12.34.0
       zod:
         specifier: 'catalog:'
         version: 4.6.5
@@ -4415,6 +4449,10 @@ packages:
       typescript:
         optional: true
 
+  cron-parser@5.10.1:
+    resolution: {integrity: sha512-pKRrRagItwk9rGIStcUyMxFX34x56zoX3KDf9HJ4ttwkXIK1qxK63EvXvEDmlxI9AdPJ+Y7TEKRftRlW5eSS7A==}
+    engines: {node: '>=18'}
+
   cross-fetch@3.2.0:
     resolution: {integrity: sha512-Q+xVJLoGOeIMXZmbUK4HYk+69cQH6LudR0Vu/pRm2YlU/hDV9CiS0gKUMaWY5f2NeUH9C1nV3bsTlCo0FsTV1Q==}
 
@@ -6163,6 +6201,10 @@ packages:
     resolution: {integrity: sha512-kQK9LGGFiHtrWiNhZtA7Qbw17AQz+dmsEKODRIVTXA9+e5MS/2gZEBhYJt13GrAz5/IOZKddH/0Z3TP/Zgo+yw==}
     engines: {node: '>=18'}
 
+  non-error@0.1.0:
+    resolution: {integrity: sha512-TMB1uHiGsHRGv1uYclfhivcnf0/PdFp2pNqRxXjncaAsjYMoisaQJI+SSZCqRq+VliwRTC8tsMQfmrWjDMhkPQ==}
+    engines: {node: '>=20'}
+
   nopt@8.1.0:
     resolution: {integrity: sha512-ieGu42u/Qsa4TFktmaKEwM6MQH0pOWnaB3htzh0JRtx84+Mebc0cbZYN5bC+6WTZ4+77xrL9Pn5m7CV6VIkV7A==}
     engines: {node: ^18.17.0 || >=20.5.0}
@@ -6361,6 +6403,11 @@ packages:
 
   pend@1.2.0:
     resolution: {integrity: sha512-F3asv42UuXchdzt+xXqfW1OGlVBe+mxa2mqI0pg5yAHZPvFmY3Y6drSf/GQ1A86WgWEN9Kzh/WrgKa6iGcHXLg==}
+
+  pg-boss@12.34.0:
+    resolution: {integrity: sha512-03boJOWLiiHEQPgXCPgrMv6My5Qv6ieD85AOrm/adi475oo74kn//gHOheYqWiU/2guCJMRpKQpD6F7Oln1aWQ==}
+    engines: {node: '>=22.12.0'}
+    hasBin: true
 
   pg-cloudflare@1.4.0:
     resolution: {integrity: sha512-Vo7z/6rrQYxpNRylp4Tlob2elzbh+N/MOQbxFVWCxS7oEx6jF53GTJFxK2WWpKuBRkmiin4Mt+xofFDjx09R0A==}
@@ -6810,6 +6857,9 @@ packages:
     resolution: {integrity: sha512-nLTrUKm2UyiL7rlhapu/Zl45FwNgkZGaCpZbIHajDYgwlJCOzLSk+cIPAnsEqV955GjILJnKbdQC1nVPz+gAYQ==}
     engines: {node: '>= 18'}
 
+  rrule-temporal@2.2.7:
+    resolution: {integrity: sha512-sd4ee2vAeb5VtGfQSVg9KWc522cHRIz2O2waSiwgRXMYeAu3LFl1qzNqR0RkoqwKWH2bKYKN8WMFdDE+ffuwPQ==}
+
   run-applescript@7.1.0:
     resolution: {integrity: sha512-DPe5pVFaAsinSaV6QjQ6gdiedWDcRCbUuiQfQa2wmWV7+xC9bGulGI8+TdRmoFkAPaBXk8CrAbnlY2ISniJ47Q==}
     engines: {node: '>=18'}
@@ -6863,6 +6913,10 @@ packages:
   send@1.2.1:
     resolution: {integrity: sha512-1gnZf7DFcoIcajTjTwjwuDjzuz4PPcY2StKPlsGAQ1+YH20IRVrBaXSWmdjowTJ6u8Rc01PoYOGHXfP1mYcZNQ==}
     engines: {node: '>= 18'}
+
+  serialize-error@13.0.1:
+    resolution: {integrity: sha512-bBZaRwLH9PN5HbLCjPId4dP5bNGEtumcErgOX952IsvOhVPrm3/AeK1y0UHA/QaPG701eg0yEnOKsCOC6X/kaA==}
+    engines: {node: '>=20'}
 
   serialize-error@2.1.0:
     resolution: {integrity: sha512-ghgmKt5o4Tly5yEG/UJp8qTd0AN7Xalw4XBtDEKP655B699qMEtra1WlXeE6WIvdEG481JvRxULKsInq/iNysw==}
@@ -7174,6 +7228,10 @@ packages:
     os: [darwin, linux, win32, freebsd, openbsd, netbsd, sunos, android]
     hasBin: true
 
+  tagged-tag@1.0.0:
+    resolution: {integrity: sha512-yEFYrVhod+hdNyx7g5Bnkkb0G6si8HJurOoOEgC8B/O0uXLHlaey/65KRv6cuWBNhBgHKAROVpc7QyYqE5gFng==}
+    engines: {node: '>=20'}
+
   tailwindcss@4.3.3:
     resolution: {integrity: sha512-gOhV3P7ufE62QDGg1zVaTgCR+EtPv92k2nIhVcVKcLmxT1sUBsQGhnZj175j+MqRt4zLF7ic+sCYjfhxMxj7YQ==}
 
@@ -7196,6 +7254,9 @@ packages:
     resolution: {integrity: sha512-fov56fJiRuThVFXD6o6/Q354S7pnWMJIVlDBYijsTNx6jKSE4pvrDTs6lUnmGvNyfJwFQQwWy3owKz1ucIhveQ==}
     engines: {node: '>=18'}
     deprecated: Old versions of tar are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+
+  temporal-spec@1.0.1:
+    resolution: {integrity: sha512-wxVoanmDeavXie1vu2JaQ3WIc3JZnWAOYFBsJyATaVsXsycKYUflGsyBmrRSnoCpZJpwPyr38VpgSUlQ8CbFxg==}
 
   terminal-link@2.1.1:
     resolution: {integrity: sha512-un0FmiRUQNr5PJqy9kP7c40F5BOfpGlYTrxonDChEZB7pzZxRNp/bt+ymiy9/npwXya9KH99nJ/GXFIiUkYGFQ==}
@@ -7337,6 +7398,10 @@ packages:
   type-fest@0.7.1:
     resolution: {integrity: sha512-Ne2YiiGN8bmrmJJEuTWTLJR32nh/JdL1+PSicowtNb0WFpn59GK8/lfD61bVtzguz7b3PBt74nxpv/Pw5po5Rg==}
     engines: {node: '>=8'}
+
+  type-fest@5.10.0:
+    resolution: {integrity: sha512-NoSdpq/WEiAg5sjmBkmV/hfxv6HJH4NqPNrqjtSO5CwRmpsDfaf4begxW34KdJykH/l1yHtwBWQkCRdoXO8mPA==}
+    engines: {node: '>=20'}
 
   type-is@2.1.0:
     resolution: {integrity: sha512-faYHw0anBbc/kWF3zFTEnxSFOAGUX9GFbOBthvDdLsIlEoWOFOtS0zgCiQYwIskL9iGXZL3kAXD8OoZ4GmMATA==}
@@ -11690,6 +11755,10 @@ snapshots:
     optionalDependencies:
       typescript: 6.0.3
 
+  cron-parser@5.10.1:
+    dependencies:
+      luxon: 3.7.2
+
   cross-fetch@3.2.0:
     dependencies:
       node-fetch: 2.7.0
@@ -13751,6 +13820,8 @@ snapshots:
 
   node-releases@2.0.57: {}
 
+  non-error@0.1.0: {}
+
   nopt@8.1.0:
     dependencies:
       abbrev: 3.0.1
@@ -13987,6 +14058,15 @@ snapshots:
   path-to-regexp@8.4.2: {}
 
   pend@1.2.0: {}
+
+  pg-boss@12.34.0:
+    dependencies:
+      cron-parser: 5.10.1
+      pg: 8.23.0
+      rrule-temporal: 2.2.7
+      serialize-error: 13.0.1
+    transitivePeerDependencies:
+      - pg-native
 
   pg-cloudflare@1.4.0:
     optional: true
@@ -14553,6 +14633,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  rrule-temporal@2.2.7:
+    dependencies:
+      temporal-spec: 1.0.1
+
   run-applescript@7.1.0: {}
 
   run-parallel@1.2.0:
@@ -14626,6 +14710,11 @@ snapshots:
       statuses: 2.0.2
     transitivePeerDependencies:
       - supports-color
+
+  serialize-error@13.0.1:
+    dependencies:
+      non-error: 0.1.0
+      type-fest: 5.10.0
 
   serialize-error@2.1.0: {}
 
@@ -14974,6 +15063,8 @@ snapshots:
 
   systeminformation@5.33.13: {}
 
+  tagged-tag@1.0.0: {}
+
   tailwindcss@4.3.3: {}
 
   tapable@2.3.3: {}
@@ -15010,6 +15101,8 @@ snapshots:
       minipass: 7.1.3
       minizlib: 3.1.0
       yallist: 5.0.0
+
+  temporal-spec@1.0.1: {}
 
   terminal-link@2.1.1:
     dependencies:
@@ -15139,6 +15232,10 @@ snapshots:
   type-fest@0.21.3: {}
 
   type-fest@0.7.1: {}
+
+  type-fest@5.10.0:
+    dependencies:
+      tagged-tag: 1.0.0
 
   type-is@2.1.0:
     dependencies:

@@ -6,6 +6,7 @@ import { and, desc, eq, lt, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { researchProcedure, router } from "../index";
 import { requireProject } from "../project-lifecycle";
+import { cancelActiveJobs } from "../research-jobs";
 
 const constraintField = z
 	.string()
@@ -205,6 +206,7 @@ export const projectsRouter = router({
 	archive: researchProcedure.input(projectId).mutation(({ ctx, input }) =>
 		ctx.db.transaction(async (tx) => {
 			await requireProject(tx, ctx.session.user.id, input.id, "write");
+			await cancelActiveJobs(tx, { projectId: input.id }, "archived");
 			await tx
 				.update(researchProject)
 				.set({ state: "archived", updatedAt: new Date() })
@@ -227,6 +229,7 @@ export const projectsRouter = router({
 		.mutation(async ({ ctx, input }) => {
 			await ctx.db.transaction(async (tx) => {
 				await requireProject(tx, ctx.session.user.id, input.id, "write");
+				await cancelActiveJobs(tx, { projectId: input.id }, "deleted");
 				await tx
 					.update(researchProject)
 					.set({

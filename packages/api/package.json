@@ -13,8 +13,9 @@
 		"@blankfolio/db": "workspace:*",
 		"@trpc/client": "catalog:",
 		"@trpc/server": "catalog:",
-		"zod": "catalog:",
-		"drizzle-orm": "catalog:"
+		"drizzle-orm": "catalog:",
+		"pg-boss": "^12.34.0",
+		"zod": "catalog:"
 	},
 	"devDependencies": {
 		"@blankfolio/config": "workspace:*",

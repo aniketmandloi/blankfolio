@@ -3,6 +3,7 @@ import { user } from "@blankfolio/db/schema/auth";
 import { pilotAccessEvent } from "@blankfolio/db/schema/pilot-access";
 import { desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
+import { cancelActiveJobs } from "./research-jobs";
 
 export type PilotAccessStatus =
 	| "eligible"
@@ -57,16 +58,31 @@ const pilotAccessChange = z.object({
 	actor: z.string().trim().min(1, "Name the operator making this change"),
 	reason: z.string().trim().min(1, "Record why eligibility is changing"),
 });
-/** Operator-only: no API route exposes this change. */
+/** Operator-only: no API route exposes this change. Revocation also cancels queued and running jobs. */
 export async function changePilotAccess(
 	db: Database,
 	change: z.input<typeof pilotAccessChange>,
 ) {
-	const [event] = await db
-		.insert(pilotAccessEvent)
-		.values(pilotAccessChange.parse(change))
-		.returning();
-	return event;
+	const values = pilotAccessChange.parse(change);
+	return db.transaction(async (tx) => {
+		const [event] = await tx
+			.insert(pilotAccessEvent)
+			.values(values)
+			.returning();
+		if (values.action === "revoke") {
+			const owners = await tx
+				.select({ id: user.id })
+				.from(user)
+				.where(eq(sql`lower(${user.email})`, values.email));
+			if (owners.length)
+				await cancelActiveJobs(
+					tx,
+					{ ownerIds: owners.map((owner) => owner.id) },
+					"access-withdrawn",
+				);
+		}
+		return event;
+	});
 }
 export async function pilotAccessHistory(db: Database, email: string) {
 	return db

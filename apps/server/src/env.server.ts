@@ -9,6 +9,7 @@ const deployedEnvSchema = z.object({
 	AUTH_MAIL_OUTBOX: z.string().optional(),
 	RESEND_API_KEY: z.string().startsWith("re_").optional(),
 	AUTH_MAIL_FROM: z.string().min(3).optional(),
+	LITERATURE_SOURCE_PRICES: z.string().min(2).optional(),
 });
 
 // Vercel functions ship without the Varlock CLI that auto-load executes, so

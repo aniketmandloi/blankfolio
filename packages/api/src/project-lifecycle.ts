@@ -1,4 +1,10 @@
 import type { Database, Transaction } from "@blankfolio/db";
+import {
+	literatureScopeRevision,
+	literatureSnapshot,
+	researchJob,
+	usageReservation,
+} from "@blankfolio/db/schema/literature";
 import { briefRevision, researchProject } from "@blankfolio/db/schema/projects";
 import { TRPCError } from "@trpc/server";
 import { and, eq, isNull } from "drizzle-orm";
@@ -43,6 +49,23 @@ export function createProjectCleanupRegistry(
 			name: "brief revisions",
 			cleanup: async (tx, id) => {
 				await tx.delete(briefRevision).where(eq(briefRevision.projectId, id));
+			},
+		},
+		{
+			name: "literature searches",
+			cleanup: async (tx, id) => {
+				// Reservations keep their amounts so spend already incurred still counts.
+				await tx
+					.update(usageReservation)
+					.set({ jobId: null, sourceExecutionId: null })
+					.where(eq(usageReservation.projectId, id));
+				await tx
+					.delete(literatureSnapshot)
+					.where(eq(literatureSnapshot.projectId, id));
+				await tx.delete(researchJob).where(eq(researchJob.projectId, id));
+				await tx
+					.delete(literatureScopeRevision)
+					.where(eq(literatureScopeRevision.projectId, id));
 			},
 		},
 		...additional,
