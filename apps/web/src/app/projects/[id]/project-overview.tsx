@@ -19,6 +19,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import ResearchTrail from "@/components/research-trail";
 import {
 	announceUnsavedBrief,
 	confirmLeavingUnsavedBrief,
@@ -399,6 +400,12 @@ export default function ProjectOverview({ id }: { id: string }) {
 						{readOnly ? "Archived" : "Active"}
 					</div>
 				</header>
+
+				<ResearchTrail
+					projectId={id}
+					current="brief"
+					onNavigate={(event) => confirmLeavingUnsavedBrief(event, isDirty)}
+				/>
 
 				<div className="detail-layout">
 					<div className="detail-primary-column">

@@ -10,6 +10,7 @@ import type { inferRouterOutputs } from "@trpc/server";
 import { ArrowLeft, Check, FileClock, Plus, X } from "lucide-react";
 import Link from "next/link";
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import ResearchTrail from "@/components/research-trail";
 import { trpc } from "@/utils/trpc";
 
 type Outputs = inferRouterOutputs<AppRouter>["literature"];
@@ -495,8 +496,8 @@ export default function LiteratureWorkspace({ id }: { id: string }) {
 	return (
 		<main className="folio-main">
 			<div className="folio-page project-overview-page">
-				<Link className="back-link" href={`/projects/${id}`}>
-					<ArrowLeft size={15} aria-hidden="true" /> Project brief
+				<Link className="back-link" href="/dashboard">
+					<ArrowLeft size={15} aria-hidden="true" /> Projects
 				</Link>
 				<header className="detail-heading">
 					<div>
@@ -511,6 +512,8 @@ export default function LiteratureWorkspace({ id }: { id: string }) {
 						</p>
 					</div>
 				</header>
+
+				<ResearchTrail projectId={id} current="literature" />
 
 				<div className="detail-layout">
 					<div className="detail-primary-column">

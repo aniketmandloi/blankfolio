@@ -36,7 +36,8 @@ summary:focus-visible {
 }
 
 /* Where you are: a highlighter band behind the lower half of the text. */
-.site-nav-link[aria-current="page"] {
+.site-nav-link[aria-current="page"],
+.trail-stage[aria-current="step"] .trail-label {
 	background-image: linear-gradient(
 		to top,
 		transparent 6%,
@@ -162,6 +163,7 @@ summary:focus-visible {
 .status-seal,
 .eyebrow,
 .page-footnote,
+.trail-later,
 .history-entry time {
 	font-family: var(--font-meta);
 	font-size: 11px;
@@ -763,6 +765,77 @@ summary:focus-visible {
 	font-size: 12px;
 }
 
+/* Research trail */
+
+.research-trail ol {
+	display: flex;
+	margin: 0;
+	padding: 0 0 0.25rem;
+	overflow-x: auto;
+	list-style: none;
+	scrollbar-width: none;
+}
+
+.trail-stage {
+	display: flex;
+	flex: 1 0 auto;
+	align-items: center;
+	gap: 0.5rem;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	white-space: nowrap;
+}
+
+.trail-stage:last-child {
+	flex-grow: 0;
+}
+
+.trail-stage:not(:last-child)::after {
+	flex: 1 0 1.25rem;
+	height: 1px;
+	margin: 0 0.75rem;
+	background: var(--border);
+	content: "";
+	transform-origin: left;
+}
+
+.trail-dot {
+	width: 8px;
+	height: 8px;
+	flex-shrink: 0;
+	border: 1.5px solid var(--primary);
+	border-radius: 50%;
+	background: var(--card);
+}
+
+.trail-stage[aria-current="step"] {
+	color: var(--foreground);
+	font-weight: 500;
+}
+
+.trail-stage[aria-current="step"] .trail-dot {
+	background: var(--primary);
+}
+
+.trail-stage[data-later] .trail-dot {
+	border-style: dashed;
+	border-color: var(--muted-foreground);
+}
+
+.trail-link {
+	color: var(--foreground);
+	text-decoration: none;
+}
+
+.trail-link:hover {
+	color: var(--primary);
+}
+
+.trail-later {
+	font-size: 10px;
+	opacity: 0.8;
+}
+
 /* Literature */
 
 .query-row {
@@ -928,5 +1001,9 @@ summary:focus-visible {
 
 	.job-row {
 		flex-direction: column;
+	}
+
+	.trail-later {
+		display: none;
 	}
 }
