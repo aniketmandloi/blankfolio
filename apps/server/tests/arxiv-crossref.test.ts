@@ -114,10 +114,11 @@ async function outcome(
 function providerWorker(handler: Parameters<typeof openAlexFetch>[0]) {
 	const recorder = openAlexFetch(handler);
 	const sleeps: number[] = [];
-	const clock = new Date();
+	const clock = { now: new Date() };
+	const now = () => clock.now;
 	const options: Partial<LiteratureWorkerOptions> = {
 		...settings,
-		now: () => clock,
+		now,
 		sleep: async (milliseconds) => {
 			sleeps.push(milliseconds);
 		},
@@ -126,12 +127,19 @@ function providerWorker(handler: Parameters<typeof openAlexFetch>[0]) {
 			openalex: createOpenAlexSource({
 				apiKey: "test-openalex-key",
 				fetch: recorder.fetch,
-				now: () => clock,
+				now,
 			}),
-			arxiv: createArxivSource({ fetch: recorder.fetch, now: () => clock }),
+			arxiv: createArxivSource({ fetch: recorder.fetch, now }),
 		},
 	};
-	return { options, calls: recorder.calls, sleeps };
+	return {
+		options,
+		calls: recorder.calls,
+		sleeps,
+		advance: (seconds: number) => {
+			clock.now = new Date(clock.now.getTime() + seconds * 1000);
+		},
+	};
 }
 
 scenario(
@@ -334,6 +342,61 @@ scenario(
 				note: null,
 				paperId: journal?.id,
 			},
+		]);
+	},
+);
+
+scenario(
+	"a newer arXiv version is a new observation of the same paper and never rewrites the version an earlier snapshot recorded",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("arxiv-versions"),
+		);
+		const projectId = await projectWithScope(researcher, {
+			queries: ["2402.00001"],
+			sources: ["arxiv"],
+		});
+		let latest = arxivEntry("2402.00001", { title: "First title" });
+		const worker = providerWorker(() => atom(arxivFeed([latest])));
+		const run = async () => {
+			const jobId = await search(researcher, projectId);
+			await workspace.runQueuedJobs(worker.options);
+			return (await outcome(researcher, projectId, jobId)).snapshot;
+		};
+		const first = await run();
+
+		latest = arxivEntry("2402.00001", {
+			version: 2,
+			title: "Revised title",
+			updated: "2026-09-01T09:00:00Z",
+			doi: "10.1234/Journal.2402",
+		});
+		worker.advance(2 * 24 * 60 * 60);
+		const second = await run();
+		expect(worker.calls).toHaveLength(2);
+		expect(second?.papers).toEqual([
+			expect.objectContaining({
+				id: first?.papers[0]?.id,
+				title: "Revised title",
+				version: "v2",
+				versionDate: "2026-09-01",
+				relatedVersions: [
+					expect.objectContaining({ identifier: "doi:10.1234/journal.2402" }),
+				],
+			}),
+		]);
+		const reread = await researcher.literature.snapshot.query({
+			projectId,
+			snapshotId: first?.id ?? "",
+		});
+		expect(reread.papers).toEqual([
+			expect.objectContaining({
+				title: "First title",
+				version: "v1",
+				url: "https://arxiv.org/abs/2402.00001v1",
+				relatedVersions: [],
+			}),
 		]);
 	},
 );
