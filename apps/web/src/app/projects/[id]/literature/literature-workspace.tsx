@@ -48,6 +48,8 @@ const errorText: Record<string, string> = {
 	"budget-exceeded": "Stopped by a spending limit.",
 	"pricing-unknown": "Disabled because pricing is not configured.",
 	"source-disabled": "This source is no longer enabled.",
+	"fixtures-disabled":
+		"Not run: fixture sources are only enabled for tests and local development.",
 	"query-failed": "At least one query failed at this source.",
 	"quota-unknown":
 		"Disabled because its daily provider quota is not configured.",
@@ -149,6 +151,7 @@ const unavailableText: Record<
 	NonNullable<CatalogSource["unavailable"]>,
 	string
 > = {
+	"fixtures-disabled": "Disabled: fixture sources are not enabled here.",
 	"pricing-unknown": "Disabled: pricing is not configured.",
 	"quota-unknown": "Disabled: the daily provider quota is not configured.",
 };

@@ -54,6 +54,8 @@ export type LiteratureWorkerOptions = {
 	db: Database;
 	prices: SourcePrices;
 	quotas?: SourceQuotas;
+	/** Off unless explicitly enabled: a job naming a fixture source then fails that source. */
+	fixtureSources?: boolean;
 	sources?: Record<string, LiteratureSource>;
 	now?: () => Date;
 	sleep?: (milliseconds: number) => Promise<void>;
@@ -113,6 +115,7 @@ export function createLiteratureWorker({
 	db,
 	prices,
 	quotas = {},
+	fixtureSources = false,
 	sources = literatureSources,
 	now = () => new Date(),
 	sleep = (milliseconds) =>
@@ -133,7 +136,8 @@ export function createLiteratureWorker({
 							const source = sources[id];
 							const filters = source?.filters(
 								scope,
-								sourceAvailability(source, { prices, quotas }).routes,
+								sourceAvailability(source, { prices, quotas, fixtureSources })
+									.routes,
 							) ?? { applied: [], unsupported: [] };
 							return {
 								id: randomUUID(),
@@ -277,6 +281,7 @@ export function createLiteratureWorker({
 		const { blockedBy, routes } = sourceAvailability(source, {
 			prices,
 			quotas,
+			fixtureSources,
 		});
 		if (blockedBy) return { outcome: "failed", errorClass: blockedBy };
 		const { scope } = job.input;

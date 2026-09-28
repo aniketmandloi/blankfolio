@@ -871,7 +871,10 @@ scenario(
 		const unpriced = client(
 			workspace,
 			cookie,
-			workspace.createAuthApp({}, { prices: {}, quotas: {} }),
+			workspace.createAuthApp(
+				{},
+				{ prices: {}, quotas: {}, fixtureSources: true },
+			),
 		);
 		const projectId = await readyProject(unpriced, "Unpriced sources");
 		const budget = await unpriced.literature.budget.query({ projectId });

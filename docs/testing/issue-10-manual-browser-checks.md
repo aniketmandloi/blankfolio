@@ -10,6 +10,8 @@ Repeat at **1280px** and **360px**. Nothing should need horizontal page scrollin
 
 ## Fixture checks (no OpenAlex configuration)
 
+Set `LITERATURE_FIXTURE_SOURCES=true` on the local API and worker for these; without it the fixture sources are not offered.
+
 1. **Disabled route, preserved work.** Without `LITERATURE_SOURCE_QUOTAS`, the Sources list shows OpenAlex as *Disabled: the daily provider quota is not configured.* and the budget panel says the same. Selecting it and searching shows the precise message; unticking it and searching with the fixture catalog works. Earlier snapshots still open.
 2. **Paper provenance.** Search `tabular transfer` with the fixture catalog. Each paper shows authors and a publication date, the source, a status line (*Preprint*, *Published version* or *Publication status not supplied*, then *Abstract available at the source (not stored)* or *Metadata only*) and a `doi:` link opening `https://doi.org/…`. No PDF is downloaded.
 3. **Allocations.** The snapshot summary says how many records each source contributed of its allocation and that 40 records are reserved for later arXiv and status checks. With both fixture sources the allocation is 80 each.

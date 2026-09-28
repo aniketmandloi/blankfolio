@@ -40,6 +40,7 @@ const openAlexSettings: SourceSettings = {
 		"openalex-filter": 100,
 	},
 	quotas: { openalex: 1_000_000 },
+	fixtureSources: true,
 };
 const apiKey = "test-openalex-key";
 
@@ -615,6 +616,7 @@ scenario(
 		const withoutQuota = researcherFor(workspace, cookie, {
 			prices: openAlexSettings.prices,
 			quotas: {},
+			fixtureSources: true,
 		});
 		const fresh = await withoutQuota.projects.create.mutate({
 			title: "Proposal",
@@ -651,6 +653,7 @@ scenario(
 		const tight: SourceSettings = {
 			prices: openAlexSettings.prices,
 			quotas: { openalex: 2_500 },
+			fixtureSources: true,
 		};
 		const researcher = researcherFor(workspace, cookie, tight);
 		const quota = openAlexWorker(
@@ -682,6 +685,7 @@ scenario(
 		const searchOnly: SourceSettings = {
 			prices: { "openalex-search": 1_000 },
 			quotas: openAlexSettings.quotas,
+			fixtureSources: true,
 		};
 		const unpriced = researcherFor(workspace, cookie, searchOnly);
 		const lookups = openAlexWorker(
@@ -727,6 +731,60 @@ scenario(
 			(await outcome(researcher, keyless, keylessJob)).openalex,
 		).toMatchObject({ status: "failed", errorClass: "credentials-missing" });
 		expect(await spent(researcher, keyless)).toBe(0);
+	},
+);
+
+scenario(
+	"a deployment without fixture sources neither lists, accepts nor runs them",
+	async (workspace) => {
+		const cookie = await workspace.signIn("no-fixtures");
+		const deployed = researcherFor(workspace, cookie, {
+			prices: {},
+			quotas: {},
+			fixtureSources: false,
+		});
+		const { id } = await deployed.projects.create.mutate({ title: "Deployed" });
+		const proposed = await deployed.literature.scope.query({ projectId: id });
+		expect(proposed.scope.sources).toEqual(["openalex"]);
+		expect(proposed.sources.map((source) => source.id)).toEqual(["openalex"]);
+		expect(
+			(await deployed.literature.budget.query({ projectId: id })).sources.map(
+				(source) => source.id,
+			),
+		).toEqual(["openalex"]);
+		await expect(
+			deployed.literature.saveScope.mutate({
+				projectId: id,
+				expectedRevision: 0,
+				scope: { ...proposed.scope, sources: ["fixture-catalog"] },
+			}),
+		).rejects.toMatchObject({ data: { code: "BAD_REQUEST" } });
+
+		// A scope saved where fixtures were enabled is refused by the API and worker without them.
+		const enabled = researcherFor(workspace, cookie);
+		const projectId = await projectWithScope(enabled, {
+			queries: ["calibration"],
+			sources: ["fixture-catalog"],
+		});
+		await expect(search(deployed, projectId)).rejects.toMatchObject({
+			data: { code: "PRECONDITION_FAILED" },
+		});
+		const jobId = await search(enabled, projectId);
+		await workspace.runQueuedJobs({ fixtureSources: false });
+		const { job } = await outcome(enabled, projectId, jobId);
+		expect(job).toMatchObject({
+			state: "failed",
+			errorClass: "all-sources-failed",
+			snapshotId: null,
+		});
+		expect(job.sources).toEqual([
+			expect.objectContaining({
+				source: "fixture-catalog",
+				status: "failed",
+				attempts: 0,
+				errorClass: "fixtures-disabled",
+			}),
+		]);
 	},
 );
 

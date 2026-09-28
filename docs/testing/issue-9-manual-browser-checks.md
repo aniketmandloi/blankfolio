@@ -7,7 +7,7 @@ These checks are for the user to run by hand. They have **not** been executed by
 Use a disposable database, never production data. Set up the pilot account as in `issue-8-manual-browser-checks.md`, then:
 
 1. `pnpm db:migrate` against the disposable database (adds `20260927114150_literature_search`).
-2. Create `apps/worker/.env` with the disposable `DATABASE_URL`, `DATABASE_MIGRATION_URL` (may be the same direct connection locally) and `LITERATURE_SOURCE_PRICES={"fixture-metered":0.02}`; add the same `LITERATURE_SOURCE_PRICES` to `apps/server/.env`.
+2. Create `apps/worker/.env` with the disposable `DATABASE_URL`, `DATABASE_MIGRATION_URL` (may be the same direct connection locally) and `LITERATURE_SOURCE_PRICES={"fixture-metered":0.02}` and `LITERATURE_FIXTURE_SOURCES=true`; add the same two variables to `apps/server/.env`.
 3. `pnpm --filter worker queue:migrate` once.
 4. With permission, start the API, the web app and `pnpm dev:worker`.
 

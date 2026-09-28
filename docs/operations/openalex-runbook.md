@@ -16,7 +16,7 @@ LITERATURE_SOURCE_PRICES={"openalex-search":0.001,"openalex-filter":0.0001}
 LITERATURE_SOURCE_QUOTAS={"openalex":1}
 ```
 
-Add fixture prices only in fixture environments. Set `OPENALEX_API_KEY` on the **worker only**; the API does not need it. The quota should not exceed the key's daily allowance you are willing to spend, because OpenAlex's budget is shared by everything using that key.
+Add fixture prices, and `LITERATURE_FIXTURE_SOURCES=true`, only in test and local fixture environments; a deployment must leave that flag unset so researchers never see fabricated papers. Set `OPENALEX_API_KEY` on the **worker only**; the API does not need it. The quota should not exceed the key's daily allowance you are willing to spend, because OpenAlex's budget is shared by everything using that key.
 
 Deploy in order: `pnpm db:migrate`, then the worker, then the API.
 

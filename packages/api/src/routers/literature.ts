@@ -77,10 +77,11 @@ export function proposeScope(
 			...new Set([brief.topic.trim(), brief.title.trim()].filter(Boolean)),
 		].map((query) => query.slice(0, 2_000)),
 		sources: [
-			literatureSources.openalex &&
-			!sourceAvailability(literatureSources.openalex, settings).blockedBy
-				? "openalex"
-				: "fixture-catalog",
+			settings.fixtureSources &&
+			(!literatureSources.openalex ||
+				sourceAvailability(literatureSources.openalex, settings).blockedBy)
+				? "fixture-catalog"
+				: "openalex",
 		],
 		dateFrom: from.toISOString().slice(0, 10),
 		dateTo: now.toISOString().slice(0, 10),
@@ -90,8 +91,13 @@ export function proposeScope(
 	};
 }
 
+/** Sources this deployment offers; disabled fixture sources are not even listed. */
+const offered = (settings: SourceSettings) =>
+	Object.values(literatureSources).filter(
+		(source) => !source.fixture || settings.fixtureSources,
+	);
 function sourceCatalog(settings: SourceSettings) {
-	return Object.values(literatureSources).map((source) => ({
+	return offered(settings).map((source) => ({
 		id: source.id,
 		label: source.label,
 		metered: source.routes.length > 0,
@@ -104,6 +110,7 @@ function sourceCatalog(settings: SourceSettings) {
 	}));
 }
 const unavailableText = {
+	"fixtures-disabled": "fixture sources are not enabled here",
 	"pricing-unknown": "its pricing is not configured",
 	"quota-unknown": "its daily quota is not configured",
 };
@@ -234,6 +241,15 @@ export const literatureRouter = router({
 					input.projectId,
 					"write",
 				);
+				const available = new Set(
+					offered(ctx.sourceSettings).map((source) => source.id),
+				);
+				if (input.scope.sources.some((id) => !available.has(id)))
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message:
+							"A selected source is not available here. Choose from the listed sources.",
+					});
 				const revision =
 					(await latestScope(tx, input.projectId))?.revision ?? 0;
 				if (revision !== input.expectedRevision)

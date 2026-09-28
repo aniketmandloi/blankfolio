@@ -15,4 +15,5 @@ export const jobQueue = createDatabaseJobQueue(db);
 export const sourceSettings = {
 	prices: parseSourcePrices(ENV.LITERATURE_SOURCE_PRICES),
 	quotas: parseSourceQuotas(ENV.LITERATURE_SOURCE_QUOTAS),
+	fixtureSources: ENV.LITERATURE_FIXTURE_SOURCES === true,
 };

@@ -17,6 +17,8 @@ A wholly failed search fails its job and publishes **no** snapshot, so it cannot
 
 ## Fixture sources
 
+Fixture sources fabricate papers, so they exist only where `LITERATURE_FIXTURE_SOURCES=true` is set on both the API and the worker: the test workspace and local development. Never set it in a deployment. Without it they are not listed, a scope naming them cannot be saved or searched, and a worker without the flag fails such a source as `fixtures-disabled` instead of running it; the proposed scope then uses OpenAlex.
+
 - `fixture-catalog` (free; supports older foundational work).
 - `fixture-metered` (simulated cost per query request; reports older foundational work as unsupported). Its price comes from `LITERATURE_SOURCE_PRICES`; without one the route is disabled and free sources keep working.
 

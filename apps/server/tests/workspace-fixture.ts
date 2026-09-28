@@ -28,6 +28,7 @@ export const fixturePrices: SourcePrices = { "fixture-metered": 20_000 };
 export const fixtureSettings: SourceSettings = {
 	prices: fixturePrices,
 	quotas: {},
+	fixtureSources: true,
 };
 
 /** No sockets, production environment files, real mail, or fallback to DATABASE_URL. */
@@ -168,6 +169,7 @@ export async function createTestWorkspace() {
 				await createLiteratureJobHandler({
 					db,
 					prices: fixturePrices,
+					fixtureSources: true,
 					sleep: async () => undefined,
 					...options,
 				})(jobs);

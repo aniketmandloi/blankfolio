@@ -11,6 +11,7 @@ const deployedEnvSchema = z.object({
 	AUTH_MAIL_FROM: z.string().min(3).optional(),
 	LITERATURE_SOURCE_PRICES: z.string().min(2).optional(),
 	LITERATURE_SOURCE_QUOTAS: z.string().min(2).optional(),
+	LITERATURE_FIXTURE_SOURCES: z.stringbool().optional(),
 });
 
 // Vercel functions ship without the Varlock CLI that auto-load executes, so

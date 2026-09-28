@@ -78,6 +78,8 @@ export type LiteratureSource = {
 	routes: string[];
 	/** A deployment-wide daily quota must be configured before this source runs. */
 	quotaRequired: boolean;
+	/** Returns fabricated records; offered only where fixture sources are enabled. */
+	fixture?: boolean;
 	filters: (
 		scope: LiteratureScope,
 		routes: string[],
@@ -107,6 +109,7 @@ function fixtureSource(
 		label,
 		routes: metered ? [id] : [],
 		quotaRequired: false,
+		fixture: true,
 		filters: ({ dateFrom, dateTo, includeFoundations }) => ({
 			applied: [
 				`publication date ${dateFrom} to ${dateTo}`,
@@ -223,19 +226,26 @@ export const parseSourcePrices = (json: string | undefined): SourcePrices =>
 export const parseSourceQuotas = (json: string | undefined): SourceQuotas =>
 	parseUsdTable(json);
 
-export type SourceSettings = { prices: SourcePrices; quotas: SourceQuotas };
+export type SourceSettings = {
+	prices: SourcePrices;
+	quotas: SourceQuotas;
+	/** Fixture sources fabricate papers, so only tests and local development enable them. */
+	fixtureSources: boolean;
+};
 /** Which paid routes are usable now, or why the whole source is disabled. */
 export function sourceAvailability(
 	source: LiteratureSource,
-	{ prices, quotas }: SourceSettings,
+	{ prices, quotas, fixtureSources }: SourceSettings,
 ) {
 	const [required] = source.routes;
 	const blockedBy =
-		required !== undefined && prices[required] === undefined
-			? ("pricing-unknown" as const)
-			: source.quotaRequired && quotas[source.id] === undefined
-				? ("quota-unknown" as const)
-				: null;
+		source.fixture && !fixtureSources
+			? ("fixtures-disabled" as const)
+			: required !== undefined && prices[required] === undefined
+				? ("pricing-unknown" as const)
+				: source.quotaRequired && quotas[source.id] === undefined
+					? ("quota-unknown" as const)
+					: null;
 	return {
 		blockedBy,
 		routes: source.routes.filter((route) => prices[route] !== undefined),
