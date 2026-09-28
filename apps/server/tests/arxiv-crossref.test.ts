@@ -795,3 +795,114 @@ scenario(
 		});
 	},
 );
+
+scenario(
+	"records alike only in title, authors and year become reviewable possible matches, and the researcher's decision never merges or rewrites them",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("possible-matches"),
+		);
+		const projectId = await projectWithScope(researcher, {
+			queries: ["robust tabular learning"],
+			sources: ["openalex"],
+		});
+		const person = (name: string) => ({
+			author: { id: `https://openalex.org/A-${name}`, display_name: name },
+		});
+		const titled = (
+			n: number,
+			title: string,
+			year: number,
+			authors: string[],
+		) =>
+			openAlexWork(n, {
+				display_name: title,
+				title,
+				publication_year: year,
+				publication_date: `${year}-02-01`,
+				authorships: authors.map(person),
+			});
+		const worker = providerWorker(() =>
+			json(
+				openAlexPage([
+					titled(10, "Robust tabular learning", 2024, [
+						"Ada Record",
+						"Ben Sample",
+					]),
+					titled(11, "Robust Tabular Learning.", 2025, ["A. Record"]),
+					titled(12, "Robust tabular learning", 2024, ["Zed Other"]),
+					titled(13, "Robust tabular learning", 2019, ["Ada Record"]),
+				]),
+			),
+		);
+		const jobId = await search(researcher, projectId);
+		await workspace.runQueuedJobs(worker.options);
+		const { snapshot } = await outcome(researcher, projectId, jobId);
+		const idOf = (n: number) =>
+			snapshot?.papers.find((p) => p.identifiers.includes(`openalex:W${n}`))
+				?.id;
+		expect(snapshot?.paperCount).toBe(4);
+		expect(snapshot?.possibleMatches).toEqual([
+			{
+				id: expect.any(String),
+				paperIds: [idOf(10), idOf(11)],
+				evidence: {
+					title: "robust tabular learning",
+					years: [2024, 2025],
+					sharedAuthors: ["record"],
+				},
+				decision: null,
+				revision: 0,
+				decidedAt: null,
+			},
+		]);
+		const [match] = snapshot?.possibleMatches ?? [];
+
+		const intruder = researcherFor(
+			workspace,
+			await workspace.signIn("possible-matches-intruder"),
+		);
+		await expect(
+			intruder.literature.decideMatch.mutate({
+				projectId,
+				matchId: match?.id ?? "",
+				decision: "same-work",
+				expectedRevision: 0,
+			}),
+		).rejects.toMatchObject({ data: { code: "NOT_FOUND" } });
+
+		const decided = await researcher.literature.decideMatch.mutate({
+			projectId,
+			matchId: match?.id ?? "",
+			decision: "same-work",
+			expectedRevision: 0,
+		});
+		expect(decided).toMatchObject({ decision: "same-work", revision: 1 });
+		await expect(
+			researcher.literature.decideMatch.mutate({
+				projectId,
+				matchId: match?.id ?? "",
+				decision: "different-works",
+				expectedRevision: 0,
+			}),
+		).rejects.toMatchObject({ data: { code: "CONFLICT" } });
+
+		const reread = await researcher.literature.snapshot.query({
+			projectId,
+			snapshotId: snapshot?.id ?? "",
+		});
+		expect(reread.paperCount).toBe(4);
+		expect(reread.papers.map((p) => p.identifiers)).toEqual(
+			snapshot?.papers.map((p) => p.identifiers),
+		);
+		expect(reread.possibleMatches).toEqual([
+			expect.objectContaining({
+				paperIds: [idOf(10), idOf(11)],
+				decision: "same-work",
+				revision: 1,
+				decidedAt: expect.any(String),
+			}),
+		]);
+	},
+);

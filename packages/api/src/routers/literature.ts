@@ -6,6 +6,7 @@ import {
 	literatureScopeRevision,
 	literatureSnapshot,
 	paper,
+	paperMatch,
 	publicationStatus,
 	researchJob,
 	type SourceRecord,
@@ -622,13 +623,99 @@ export const literatureRouter = router({
 						};
 					},
 				);
+				const rank = new Map(papers.map((row, index) => [row.id, index]));
+				const paperIdList = [...rank.keys()];
+				const matches = paperIdList.length
+					? await tx
+							.select()
+							.from(paperMatch)
+							.where(
+								and(
+									eq(paperMatch.projectId, input.projectId),
+									inArray(paperMatch.paperId, paperIdList),
+									inArray(paperMatch.otherPaperId, paperIdList),
+								),
+							)
+					: [];
 				return {
 					...snapshot.snapshot,
 					scope: snapshot.scope,
 					sources: await sourceOutcomes(tx, snapshot.snapshot.jobId),
 					papers,
+					possibleMatches: matches
+						.map((match) => {
+							// Listed in snapshot order, whichever way the pair is stored.
+							const swap =
+								(rank.get(match.paperId) ?? 0) >
+								(rank.get(match.otherPaperId) ?? 0);
+							const [year, otherYear] = match.evidence.years;
+							return {
+								id: match.id,
+								paperIds: swap
+									? [match.otherPaperId, match.paperId]
+									: [match.paperId, match.otherPaperId],
+								evidence: {
+									...match.evidence,
+									years: swap ? [otherYear, year] : [year, otherYear],
+								},
+								decision: match.decision,
+								revision: match.revision,
+								decidedAt: match.decidedAt,
+							};
+						})
+						.sort(
+							(a, b) =>
+								(rank.get(a.paperIds[0] ?? "") ?? 0) -
+								(rank.get(b.paperIds[0] ?? "") ?? 0),
+						),
 				};
 			}, readOnly),
+		),
+	decideMatch: researchProcedure
+		.input(
+			projectRef.extend({
+				matchId: z.string().uuid(),
+				decision: z.enum(["same-work", "different-works"]),
+				expectedRevision: z.number().int().min(0),
+			}),
+		)
+		.mutation(({ ctx, input }) =>
+			ctx.db.transaction(async (tx) => {
+				await requireProject(tx, ctx.session.user.id, input.projectId, "write");
+				const mine = and(
+					eq(paperMatch.id, input.matchId),
+					eq(paperMatch.projectId, input.projectId),
+				);
+				const [decided] = await tx
+					.update(paperMatch)
+					.set({
+						decision: input.decision,
+						revision: input.expectedRevision + 1,
+						decidedAt: new Date(),
+					})
+					.where(and(mine, eq(paperMatch.revision, input.expectedRevision)))
+					.returning({
+						id: paperMatch.id,
+						decision: paperMatch.decision,
+						revision: paperMatch.revision,
+						decidedAt: paperMatch.decidedAt,
+					});
+				if (decided) return decided;
+				const [exists] = await tx
+					.select({ id: paperMatch.id })
+					.from(paperMatch)
+					.where(mine);
+				throw exists
+					? new TRPCError({
+							code: "CONFLICT",
+							message:
+								"This possible match was decided in another tab. Reload it before deciding again.",
+						})
+					: new TRPCError({
+							code: "NOT_FOUND",
+							message: "Possible match not found",
+						});
+			}),
 		),
 	budget: researchProcedure.input(projectRef).query(({ ctx, input }) =>
 		ctx.db.transaction(async (tx) => {

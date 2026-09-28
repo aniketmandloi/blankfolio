@@ -304,6 +304,50 @@ export const snapshotPaper = pgTable(
 	(table) => [primaryKey({ columns: [table.snapshotId, table.paperId] })],
 );
 
+export type MatchEvidence = {
+	title: string;
+	years: [number, number];
+	sharedAuthors: string[];
+};
+/**
+ * Two papers sharing no identifier but alike in normalised title, year and an author's family
+ * name. A decision is the project's own and never merges, moves or rewrites either paper.
+ */
+export const paperMatch = pgTable(
+	"paper_match",
+	{
+		id: text("id").primaryKey(),
+		projectId: text("project_id")
+			.notNull()
+			.references(() => researchProject.id, { onDelete: "cascade" }),
+		/** Ordered so each pair is stored once per project. */
+		paperId: text("paper_id")
+			.notNull()
+			.references(() => paper.id),
+		otherPaperId: text("other_paper_id")
+			.notNull()
+			.references(() => paper.id),
+		evidence: jsonb("evidence").$type<MatchEvidence>().notNull(),
+		decision: text("decision").$type<"same-work" | "different-works">(),
+		revision: integer("revision").notNull().default(0),
+		decidedAt: timestamp("decided_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("paper_match_pair_idx").on(
+			table.projectId,
+			table.paperId,
+			table.otherPaperId,
+		),
+		check(
+			"paper_match_order_check",
+			sql`${table.paperId} < ${table.otherPaperId}`,
+		),
+	],
+);
+
 export type PaperStatusCheck =
 	| {
 			check: "checked" | "not-registered";

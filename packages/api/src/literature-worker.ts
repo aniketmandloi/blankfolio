@@ -6,6 +6,7 @@ import {
 	type PaperStatusCheck,
 	paper,
 	paperAlias,
+	paperMatch,
 	publicationStatus,
 	researchJob,
 	type SourceObservation,
@@ -110,6 +111,65 @@ function keepRecords(executions: Execution[]) {
 			for (const alias of aliases) byAlias.set(alias, entry);
 		}
 	return kept;
+}
+
+const normalisedTitle = (title: string) =>
+	title
+		.normalize("NFKD")
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}]+/gu, " ")
+		.trim();
+const familyNames = (authors: string[]) =>
+	new Set(
+		authors.flatMap(
+			(name) =>
+				name
+					.normalize("NFKD")
+					.toLowerCase()
+					.replace(/[^\p{L}\s-]/gu, "")
+					.trim()
+					.split(/\s+/)
+					.at(-1) || [],
+		),
+	);
+/**
+ * Pairs of distinct papers alike in normalised title, a year apart at most and sharing an
+ * author's family name. A shared title alone is never enough.
+ */
+function possibleMatches(papers: { id: string; record: SourceRecord }[]) {
+	const byTitle = new Map<string, typeof papers>();
+	for (const entry of papers) {
+		const title = normalisedTitle(entry.record.title);
+		byTitle.set(title, [...(byTitle.get(title) ?? []), entry]);
+	}
+	return [...byTitle].flatMap(([title, group]) =>
+		group.flatMap((one, index) =>
+			group.slice(index + 1).flatMap((other) => {
+				const [first, second] = one.id < other.id ? [one, other] : [other, one];
+				const names = familyNames(second.record.authors);
+				const sharedAuthors = [...familyNames(first.record.authors)].filter(
+					(name) => names.has(name),
+				);
+				return Math.abs(first.record.year - second.record.year) <= 1 &&
+					sharedAuthors.length
+					? [
+							{
+								paperId: first.id,
+								otherPaperId: second.id,
+								evidence: {
+									title,
+									years: [first.record.year, second.record.year] as [
+										number,
+										number,
+									],
+									sharedAuthors: sharedAuthors.sort(),
+								},
+							},
+						]
+					: [];
+			}),
+		),
+	);
 }
 
 /** Statuses confirmed within this window are reused rather than looked up again. */
@@ -813,6 +873,23 @@ export function createLiteratureWorker({
 						statusCheck: statusChecks.get(entry),
 					})),
 				);
+			const matches = possibleMatches(
+				members.map((entry) => ({
+					id: paperIds.get(entry) ?? "",
+					record: entry.record,
+				})),
+			);
+			if (matches.length)
+				await tx
+					.insert(paperMatch)
+					.values(
+						matches.map((match) => ({
+							id: randomUUID(),
+							projectId: job.projectId,
+							...match,
+						})),
+					)
+					.onConflictDoNothing();
 			await tx
 				.update(researchJob)
 				.set({ state: "succeeded", stage: "done", ...done })
