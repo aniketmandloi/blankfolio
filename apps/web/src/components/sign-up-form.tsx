@@ -57,9 +57,14 @@ export default function SignUpForm({
 		<main className="folio-main">
 			<div className="folio-page">
 				<section className="account-state" aria-labelledby="sign-up-title">
-					<h1 className="display-title" id="sign-up-title">
-						Create an account
-					</h1>
+					<div>
+						<h1 className="display-title" id="sign-up-title">
+							Create an account
+						</h1>
+						<p className="page-intro">
+							Turn a broad interest into a defensible research question.
+						</p>
+					</div>
 
 					<form
 						onSubmit={(e) => {

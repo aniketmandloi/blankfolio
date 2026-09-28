@@ -65,9 +65,14 @@ export default function SignInForm({
 		<main className="folio-main">
 			<div className="folio-page">
 				<section className="account-state" aria-labelledby="sign-in-title">
-					<h1 className="display-title" id="sign-in-title">
-						Sign in
-					</h1>
+					<div>
+						<h1 className="display-title" id="sign-in-title">
+							Sign in
+						</h1>
+						<p className="page-intro">
+							Turn a broad interest into a defensible research question.
+						</p>
+					</div>
 					{notice && (
 						<p className="muted-copy" role="status">
 							{notice}
