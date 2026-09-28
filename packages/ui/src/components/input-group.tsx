@@ -9,6 +9,7 @@ import * as React from "react";
 
 function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
 	return (
+		// biome-ignore lint/a11y/useSemanticElements: a fieldset would add browser styling and disable-propagation this wrapper must not have
 		<div
 			data-slot="input-group"
 			role="group"
@@ -53,6 +54,8 @@ function InputGroupAddon({
 	...props
 }: React.ComponentProps<"div"> & VariantProps<typeof inputGroupAddonVariants>) {
 	return (
+		// biome-ignore lint/a11y/useSemanticElements: a fieldset would add browser styling and disable-propagation this wrapper must not have
+		// biome-ignore lint/a11y/useKeyWithClickEvents: the click only forwards focus to the input, which keyboard users reach directly
 		<div
 			role="group"
 			data-slot="input-group-addon"
@@ -159,7 +162,7 @@ export {
 	InputGroup,
 	InputGroupAddon,
 	InputGroupButton,
-	InputGroupText,
 	InputGroupInput,
+	InputGroupText,
 	InputGroupTextarea,
 };

@@ -1,6 +1,6 @@
-import { Button, Column, Host, Text as ExpoUIText } from "@expo/ui";
-import { Stack, router } from "expo-router";
-import { Text, View, StyleSheet } from "react-native";
+import { Button, Column, Text as ExpoUIText, Host } from "@expo/ui";
+import { router, Stack } from "expo-router";
+import { StyleSheet, Text, View } from "react-native";
 
 import { Container } from "@/components/container";
 import { NAV_THEME } from "@/lib/constants";

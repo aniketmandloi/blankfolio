@@ -1,6 +1,6 @@
-import { Button, Column, Host, Text as ExpoUIText } from "@expo/ui";
+import { Button, Column, Text as ExpoUIText, Host } from "@expo/ui";
 import { useQuery } from "@tanstack/react-query";
-import { View, ScrollView, StyleSheet } from "react-native";
+import { ScrollView, StyleSheet, View } from "react-native";
 
 import { Container } from "@/components/container";
 import { SignIn } from "@/components/sign-in";
