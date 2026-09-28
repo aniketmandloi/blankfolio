@@ -70,6 +70,8 @@ const errorText: Record<string, string> = {
 		"Not searched: the worker has no credentials for this provider.",
 	"stale-cache":
 		"The provider failed, so some results come from an older cached answer (age shown above).",
+	"not-configured":
+		"No publication-status source is configured for the worker.",
 };
 const reasonText: Record<Paper["acquisitionReason"], string> = {
 	discovery: "",
@@ -124,8 +126,74 @@ function allocationText(snapshot: Snapshot) {
 		const older = total - (entry.kept.discovery ?? 0);
 		return `${label} contributed ${total} of its ${entry.allocation}${older ? ` (${older} older or looked-up works)` : ""}`;
 	});
-	return ` ${kept.join("; ")}. ${snapshot.allocations.reserved} records are reserved for later arXiv and status checks.`;
+	return ` ${kept.join("; ")}.${snapshot.allocations.reserved ? ` ${snapshot.allocations.reserved} records are held back for arXiv's recent preprints, which this search did not include.` : ""}`;
 }
+type PublicationStatus = Paper["publicationStatus"];
+const statusStateText: Record<PublicationStatus["state"], string> = {
+	retracted: "Retracted",
+	withdrawn: "Withdrawn",
+	removed: "Removed",
+	concern: "Expression of concern",
+	corrected: "Corrected",
+	updated: "Updated after publication",
+	"no-known-updates": "No correction or retraction known",
+	unknown: "Publication status unknown",
+};
+const statusCheckText: Record<PublicationStatus["check"], string> = {
+	checked: "Crossref checked",
+	"not-registered": "Not registered with Crossref; checked",
+	"not-covered":
+		"Crossref does not register this DOI, so its status was not checked",
+	"no-doi": "No DOI, so its status was not checked",
+	failed: "The status check did not complete for this paper",
+	"not-run": "Publication status was not checked",
+};
+const supportText: Record<PublicationStatus["positiveSupport"], string> = {
+	disallowed: " It cannot count as ordinary supporting evidence.",
+	review: " Review what changed before relying on it.",
+	allowed: "",
+};
+const updateSourceText: Record<string, string> = {
+	publisher: "publisher",
+	"retraction-watch": "Retraction Watch",
+	arxiv: "arXiv",
+};
+function statusText(status: PublicationStatus) {
+	const updates = status.updates.map(
+		(update) =>
+			`${update.label}${update.date ? ` ${update.date}` : ""} (${updateSourceText[update.source] ?? update.source})`,
+	);
+	const checked = status.checkedAt
+		? `${statusCheckText[status.check]} ${status.checkedAt.slice(0, 10)}`
+		: statusCheckText[status.check];
+	return `${[statusStateText[status.state], ...updates, checked].join(" · ")}.${supportText[status.positiveSupport]}${status.newerStatusKnown ? " A newer status has been found since; this snapshot keeps the one it recorded." : ""}`;
+}
+function snapshotStatusText(check: Snapshot["statusCheck"]) {
+	if (!check) return "";
+	if (check.outcome === "not-run")
+		return " Publication status was not checked for this snapshot, so every status is unknown.";
+	const registered = `${check.checked} DOIs checked with Crossref${check.notRegistered ? `, ${check.notRegistered} not registered there` : ""}`;
+	if (check.outcome === "complete")
+		return ` ${registered}. No notice found is not the same as a clean record.`;
+	return ` The Crossref status check ${check.outcome === "partial" ? "stopped early" : "failed"} (${errorText[check.errorClass ?? ""] ?? check.errorClass}): ${registered}, ${check.unknown} unknown.`;
+}
+function versionText(paper: Paper) {
+	return [
+		paper.version
+			? `Version ${paper.version}${paper.versionDate ? ` of ${paper.versionDate}` : ""}`
+			: "",
+		...paper.alsoObserved.map(
+			(seen) =>
+				`Also returned by ${seen.source === "arxiv" ? "arXiv" : seen.source === "openalex" ? "OpenAlex" : seen.source}${seen.version ? ` (${seen.version})` : ""}`,
+		),
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+const relationText = {
+	"published-version": "Published version",
+	preprint: "Preprint",
+};
 const outcomeText: Record<SourceOutcome["status"], string> = {
 	pending: "Waiting",
 	running: "Searching",
@@ -253,6 +321,90 @@ function OutcomeDetails({ outcome }: { outcome: SourceOutcome }) {
 	);
 }
 
+type PossibleMatch = Snapshot["possibleMatches"][number];
+const decisionText: Record<NonNullable<PossibleMatch["decision"]>, string> = {
+	"same-work": "You marked these as the same work. Both records stay as found.",
+	"different-works": "You marked these as different works.",
+};
+function PossibleMatches({
+	projectId,
+	snapshot,
+}: {
+	projectId: string;
+	snapshot: Snapshot;
+}) {
+	const queryClient = useQueryClient();
+	const decide = useMutation(
+		trpc.literature.decideMatch.mutationOptions({
+			onSettled: () =>
+				queryClient.invalidateQueries({
+					queryKey: trpc.literature.snapshot.queryKey({
+						projectId,
+						snapshotId: snapshot.id,
+					}),
+				}),
+		}),
+	);
+	if (!snapshot.possibleMatches.length) return null;
+	const titleOf = (id: string | undefined) =>
+		snapshot.papers.find((paper) => paper.id === id)?.title ?? "Unknown paper";
+	return (
+		<section aria-labelledby="matches-heading">
+			<h3 id="matches-heading">Possible matches to review</h3>
+			<p className="field-caption">
+				These records share no identifier but have the same title, years at most
+				one apart and a shared author family name. They stay separate papers
+				whatever you decide.
+			</p>
+			<ol className="paper-list">
+				{snapshot.possibleMatches.map((match) => (
+					<li key={match.id}>
+						<p className="paper-title">
+							{titleOf(match.paperIds[0])} ({match.evidence.years[0]}) and{" "}
+							{titleOf(match.paperIds[1])} ({match.evidence.years[1]})
+						</p>
+						<p className="field-caption">
+							Shared author family name
+							{match.evidence.sharedAuthors.length > 1 ? "s" : ""}:{" "}
+							{match.evidence.sharedAuthors.join(", ")}.{" "}
+							{match.decision
+								? decisionText[match.decision]
+								: "Not reviewed yet."}
+						</p>
+						<div className="job-actions">
+							{(["same-work", "different-works"] as const).map((decision) => (
+								<Button
+									key={decision}
+									type="button"
+									variant="outline"
+									size="sm"
+									aria-pressed={match.decision === decision}
+									disabled={decide.isPending}
+									onClick={() =>
+										decide.mutate({
+											projectId,
+											matchId: match.id,
+											decision,
+											expectedRevision: match.revision,
+										})
+									}
+								>
+									{decision === "same-work" ? "Same work" : "Different works"}
+								</Button>
+							))}
+						</div>
+						{decide.isError && decide.variables?.matchId === match.id && (
+							<p className="form-error" role="alert">
+								{messageOf(decide.error)}
+							</p>
+						)}
+					</li>
+				))}
+			</ol>
+		</section>
+	);
+}
+
 function SnapshotView({
 	projectId,
 	snapshotId,
@@ -293,12 +445,14 @@ function SnapshotView({
 					: "."}{" "}
 				{snapshot.paperCount} of at most {snapshot.recordCap} records kept.
 				{allocationText(snapshot)}
+				{snapshotStatusText(snapshot.statusCheck)}
 			</p>
 			<div className="history-list">
 				{snapshot.sources.map((outcome) => (
 					<OutcomeDetails key={outcome.source} outcome={outcome} />
 				))}
 			</div>
+			<PossibleMatches projectId={projectId} snapshot={snapshot} />
 			{snapshot.papers.length === 0 ? (
 				<p className="muted-copy paper-empty">
 					No papers matched this scope. An empty search is not evidence of a
@@ -316,6 +470,25 @@ function SnapshotView({
 									?.label ?? paper.source}
 							</p>
 							<p className="field-caption">{paperStatus(paper)}</p>
+							{versionText(paper) && (
+								<p className="field-caption">{versionText(paper)}</p>
+							)}
+							{paper.relatedVersions.map((related) => (
+								<p className="field-caption" key={related.identifier}>
+									{relationText[related.relation]}:{" "}
+									<Identifier value={related.identifier} />
+									{related.note ? ` (${related.note})` : ""}
+									{related.paperId
+										? ", also in this snapshot as a separate paper"
+										: ""}
+								</p>
+							))}
+							<p
+								className="field-caption paper-status"
+								data-support={paper.publicationStatus.positiveSupport}
+							>
+								{statusText(paper.publicationStatus)}
+							</p>
 							{(paper.identifiers.length > 0 || paper.url) && (
 								<p className="field-caption">
 									{paper.identifiers.map((identifier) => (
