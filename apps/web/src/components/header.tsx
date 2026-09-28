@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import {
@@ -12,6 +13,9 @@ import UserMenu from "./user-menu";
 
 export default function Header() {
 	const [hasUnsavedBrief, setHasUnsavedBrief] = useState(false);
+	const pathname = usePathname();
+	const inProjects =
+		pathname === "/dashboard" || pathname.startsWith("/projects/");
 
 	useEffect(() => onUnsavedBriefChange(setHasUnsavedBrief), []);
 
@@ -32,6 +36,7 @@ export default function Header() {
 						<Link
 							className="site-nav-link"
 							href="/dashboard"
+							aria-current={inProjects ? "page" : undefined}
 							onClick={(event) =>
 								confirmLeavingUnsavedBrief(event, hasUnsavedBrief)
 							}
