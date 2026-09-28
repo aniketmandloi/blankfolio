@@ -19,6 +19,7 @@ import { researchProcedure, router } from "../index";
 import {
 	literatureSources,
 	maxChargeMicros,
+	recordAliases,
 	type SourceSettings,
 	sourceAllocation,
 	sourceAvailability,
@@ -477,7 +478,7 @@ export const literatureRouter = router({
 						code: "NOT_FOUND",
 						message: "Literature Snapshot not found",
 					});
-				const papers = await tx
+				const rows = await tx
 					.select({
 						id: paper.id,
 						title: paper.title,
@@ -487,11 +488,38 @@ export const literatureRouter = router({
 						url: paper.url,
 						source: snapshotPaper.source,
 						acquisitionReason: snapshotPaper.acquisitionReason,
+						observation: snapshotPaper.observation,
 					})
 					.from(snapshotPaper)
 					.innerJoin(paper, eq(paper.id, snapshotPaper.paperId))
 					.where(eq(snapshotPaper.snapshotId, input.snapshotId))
 					.orderBy(asc(snapshotPaper.rank));
+				// A snapshot shows what its source observed, not later corrections to the paper.
+				const papers = rows.map(({ observation, ...row }) => {
+					const seen = observation ?? { ...row, key: "" };
+					return {
+						id: row.id,
+						source: row.source,
+						acquisitionReason: row.acquisitionReason,
+						title: seen.title,
+						authors: seen.authors,
+						year: seen.year,
+						doi: seen.doi,
+						url: seen.url,
+						identifiers: observation
+							? recordAliases(observation).filter(
+									(alias) => !alias.startsWith("fixture:"),
+								)
+							: row.doi
+								? [`doi:${row.doi.toLowerCase()}`]
+								: [],
+						publicationDate: observation?.publicationDate ?? null,
+						preprint: observation?.preprint ?? null,
+						workType: observation?.workType ?? null,
+						abstractAvailable: observation?.abstractAvailable ?? false,
+						sourceUpdatedAt: observation?.sourceUpdatedAt ?? null,
+					};
+				});
 				return {
 					...snapshot.snapshot,
 					scope: snapshot.scope,

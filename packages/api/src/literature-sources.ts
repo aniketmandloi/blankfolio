@@ -4,6 +4,15 @@ import type {
 	SourceRecord,
 } from "@blankfolio/db/schema/literature";
 import { z } from "zod";
+import { createOpenAlexSource } from "./openalex";
+import { TransientSourceError, UncertainSourceOutcome } from "./source-errors";
+
+export {
+	maxRetryAfterSeconds,
+	SourceUnavailableError,
+	TransientSourceError,
+	UncertainSourceOutcome,
+} from "./source-errors";
 
 export const recordCap = 200;
 /** Held back from every discovery run for the later arXiv and status stages. */
@@ -11,8 +20,6 @@ export const laterStageReserve = 40;
 /** Records each selected source may contribute; the reserve is never allocated. */
 export const sourceAllocation = (sourceCount: number) =>
 	Math.floor((recordCap - laterStageReserve) / sourceCount);
-/** A provider asking for a longer wait is treated as unavailable for this run. */
-export const maxRetryAfterSeconds = 60;
 /** Cached provider responses older than this are deleted and never served, even as stale. */
 export const responseCacheRetentionSeconds = 7 * 24 * 60 * 60;
 
@@ -79,25 +86,6 @@ export type LiteratureSource = {
 	maxRequests: (request: ChargeRequest) => Record<string, number>;
 	search: (request: SourceRequest) => Promise<SourceResult>;
 };
-
-/** The provider refused before doing billable work, so another attempt is safe. */
-export class TransientSourceError extends Error {
-	constructor(readonly retryAfterSeconds = 0) {
-		super("source-unavailable");
-	}
-}
-/** The request may have been processed and billed; its outcome is unknown. */
-export class UncertainSourceOutcome extends Error {
-	constructor() {
-		super("uncertain-outcome");
-	}
-}
-/** Nothing billable happened and another attempt cannot help, e.g. missing credentials. */
-export class SourceUnavailableError extends Error {
-	constructor(readonly errorClass: string) {
-		super(errorClass);
-	}
-}
 
 const digest = (text: string) =>
 	createHash("sha256").update(text).digest("hex").slice(0, 12);
@@ -211,6 +199,8 @@ export const literatureSources: Record<string, LiteratureSource> = {
 		"Fixture metered index (simulated cost)",
 		true,
 	),
+	/** Without credentials it fails visibly; the worker supplies a configured instance. */
+	openalex: createOpenAlexSource({}),
 };
 
 /** Micro-dollars per request on each paid route; a source whose required route is unpriced is disabled. */

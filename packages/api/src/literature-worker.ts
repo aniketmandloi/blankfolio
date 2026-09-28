@@ -337,7 +337,12 @@ export function createLiteratureWorker({
 						return { outcome: "failed", errorClass: "uncertain-outcome" };
 					}
 				} else if (error instanceof SourceUnavailableError) {
-					if (reservation) await settleUsage(db, reservation, 0);
+					if (reservation)
+						await settleUsage(
+							db,
+							reservation,
+							usageMicros(error.usage, prices),
+						);
 					return { outcome: "failed", errorClass: error.errorClass };
 				} else if (error instanceof TransientSourceError) {
 					if (reservation) await settleUsage(db, reservation, 0);
