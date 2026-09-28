@@ -13,6 +13,8 @@ import {
 	openAlexFetch,
 	openAlexPage,
 	openAlexWork,
+	rateHeaders,
+	timeout,
 } from "./openalex-fixture";
 import { createTestWorkspace, fixturePrices } from "./workspace-fixture";
 
@@ -440,5 +442,276 @@ scenario(
 		expect(refreshed.snapshot?.papers.map((p) => p.id).sort()).toEqual(
 			snapshot?.papers.map((p) => p.id).sort(),
 		);
+	},
+);
+
+scenario(
+	"a rate-limited OpenAlex answer pauses the provider for every worker, is not retried and never becomes an empty corpus",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("openalex-throttle"),
+		);
+		let limited = true;
+		const worker = openAlexWorker(() =>
+			limited
+				? new Response(
+						JSON.stringify({
+							error: "Too Many Requests",
+							message: "Daily budget exceeded",
+						}),
+						{ status: 429, headers: rateHeaders(0, 3_600) },
+					)
+				: json(openAlexPage([openAlexWork(1)])),
+		);
+		const projectId = await projectWithScope(researcher, {
+			queries: ["calibration under shift"],
+		});
+		const refused = await search(researcher, projectId);
+		await workspace.runQueuedJobs(worker.options);
+		const first = await outcome(researcher, projectId, refused);
+		expect(first.job).toMatchObject({
+			state: "failed",
+			errorClass: "all-sources-failed",
+			snapshotId: null,
+		});
+		expect(first.openalex).toMatchObject({
+			status: "failed",
+			attempts: 1,
+			errorClass: "rate-limited",
+		});
+		expect(worker.calls).toHaveLength(1);
+		expect(await spent(researcher, projectId)).toBe(0);
+
+		// Another project's search during the pause sends nothing and keeps its other source.
+		const otherId = await projectWithScope(researcher, {
+			queries: ["domain shift"],
+			sources: ["openalex", "fixture-catalog"],
+		});
+		const paused = await search(researcher, otherId);
+		await workspace.runQueuedJobs(worker.options);
+		const second = await outcome(researcher, otherId, paused);
+		expect(second.job.state).toBe("succeeded");
+		expect(second.openalex).toMatchObject({
+			status: "failed",
+			attempts: 0,
+			errorClass: "rate-limited",
+		});
+		expect(second.snapshot?.coverage).toBe("partial");
+		expect(worker.calls).toHaveLength(1);
+
+		limited = false;
+		worker.advance(3_601);
+		const resumed = await search(researcher, projectId);
+		await workspace.runQueuedJobs(worker.options);
+		expect(
+			(await outcome(researcher, projectId, resumed)).openalex,
+		).toMatchObject({ status: "succeeded", receivedCount: 1 });
+		expect(worker.calls).toHaveLength(2);
+	},
+);
+
+scenario(
+	"OpenAlex timeouts, empty answers and outages keep partial cursors, hold uncertain spend and label stale cached results",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("openalex-failures"),
+		);
+		let down = false;
+		const worker = openAlexWorker((url) => {
+			if (down) return new Response("unavailable", { status: 503 });
+			const query = url.searchParams.get("search");
+			if (query === "nothing indexed") return json(openAlexPage([], 0));
+			if (query === "lost answer") return timeout();
+			if (url.searchParams.get("cursor") === "*")
+				return json(
+					openAlexPage(
+						Array.from({ length: 100 }, (_, i) => openAlexWork(i + 1)),
+						150,
+						"cursor-2",
+					),
+				);
+			return timeout();
+		});
+		const projectId = await projectWithScope(researcher, {
+			queries: ["calibration"],
+		});
+		const run = async (queries: string[]) => {
+			await saveScope(researcher, projectId, { queries });
+			const jobId = await search(researcher, projectId);
+			await workspace.runQueuedJobs(worker.options);
+			return outcome(researcher, projectId, jobId);
+		};
+
+		const cutShort = await run(["calibration"]);
+		expect(cutShort.openalex).toMatchObject({
+			status: "partial",
+			attempts: 1,
+			errorClass: "timeout",
+			reportedCount: 150,
+			receivedCount: 100,
+			truncated: true,
+			cursor: JSON.stringify(["cursor-2"]),
+		});
+		expect(cutShort.snapshot).toMatchObject({
+			coverage: "partial",
+			paperCount: 100,
+		});
+		// The timed-out page may have been billed, so it counts.
+		expect(await spent(researcher, projectId)).toBe(2_000);
+
+		const empty = await run(["nothing indexed"]);
+		expect(empty.openalex).toMatchObject({
+			status: "empty",
+			receivedCount: 0,
+			reportedCount: 0,
+		});
+		expect(empty.snapshot).toMatchObject({
+			coverage: "all-sources",
+			paperCount: 0,
+		});
+		expect(await spent(researcher, projectId)).toBe(3_000);
+
+		const calls = worker.calls.length;
+		const lost = await run(["lost answer"]);
+		expect(lost.job).toMatchObject({
+			state: "failed",
+			errorClass: "all-sources-failed",
+			snapshotId: null,
+		});
+		expect(lost.openalex).toMatchObject({
+			status: "failed",
+			attempts: 1,
+			errorClass: "uncertain-outcome",
+		});
+		expect(worker.calls).toHaveLength(calls + 1);
+		expect(await spent(researcher, projectId)).toBe(5_000);
+
+		// Three days later OpenAlex is down: live attempts are retried first, then the last one
+		// falls back to the cached first page and says so.
+		down = true;
+		worker.advance(3 * 24 * 60 * 60);
+		const stale = await run(["calibration"]);
+		expect(stale.openalex).toMatchObject({
+			status: "partial",
+			attempts: 3,
+			errorClass: "stale-cache",
+			cacheAgeSeconds: 3 * 24 * 60 * 60,
+			receivedCount: 100,
+		});
+		expect(stale.snapshot?.coverage).toBe("partial");
+		expect(worker.calls).toHaveLength(calls + 4);
+	},
+);
+
+scenario(
+	"missing quota, prices or credentials disable only the affected OpenAlex route, and the daily quota is shared across projects",
+	async (workspace) => {
+		const cookie = await workspace.signIn("openalex-config");
+		const withoutQuota = researcherFor(workspace, cookie, {
+			prices: openAlexSettings.prices,
+			quotas: {},
+		});
+		const unconfigured = await projectWithScope(withoutQuota, {
+			queries: ["calibration"],
+		});
+		const budget = await withoutQuota.literature.budget.query({
+			projectId: unconfigured,
+		});
+		expect(budget.sources.find((s) => s.id === "openalex")).toMatchObject({
+			unavailable: "quota-unknown",
+			blockedBy: "quota-unknown",
+		});
+		await expect(search(withoutQuota, unconfigured)).rejects.toMatchObject({
+			data: { code: "PRECONDITION_FAILED" },
+		});
+		await saveScope(withoutQuota, unconfigured, {
+			queries: ["calibration"],
+			sources: ["fixture-catalog"],
+		});
+		await search(withoutQuota, unconfigured);
+
+		// $0.0025 a day across the deployment: one search reserves $0.002 and settles $0.001
+		// after one page, which leaves too little for another project's reservation.
+		const tight: SourceSettings = {
+			prices: openAlexSettings.prices,
+			quotas: { openalex: 2_500 },
+		};
+		const researcher = researcherFor(workspace, cookie, tight);
+		const quota = openAlexWorker(
+			() => json(openAlexPage([openAlexWork(1)])),
+			tight,
+		);
+		const first = await projectWithScope(researcher, {
+			queries: ["calibration"],
+		});
+		const second = await projectWithScope(researcher, {
+			queries: ["calibration"],
+		});
+		const firstJob = await search(researcher, first);
+		await workspace.runQueuedJobs(quota.options);
+		const secondJob = await search(researcher, second);
+		await workspace.runQueuedJobs(quota.options);
+		expect((await outcome(researcher, first, firstJob)).openalex?.status).toBe(
+			"succeeded",
+		);
+		expect(
+			(await outcome(researcher, second, secondJob)).openalex,
+		).toMatchObject({
+			status: "failed",
+			attempts: 0,
+			errorClass: "quota-exhausted",
+		});
+		expect(quota.calls).toHaveLength(1);
+
+		const searchOnly: SourceSettings = {
+			prices: { "openalex-search": 1_000 },
+			quotas: openAlexSettings.quotas,
+		};
+		const unpriced = researcherFor(workspace, cookie, searchOnly);
+		const lookups = openAlexWorker(
+			(url) =>
+				json(
+					openAlexPage([
+						openAlexWork(url.searchParams.get("search")?.length ?? 0),
+					]),
+				),
+			searchOnly,
+		);
+		const partlyPriced = await projectWithScope(unpriced, {
+			queries: ["calibration", "10.1234/recorded.7"],
+			includeFoundations: true,
+		});
+		const partlyJob = await search(unpriced, partlyPriced);
+		await workspace.runQueuedJobs(lookups.options);
+		expect(
+			(await outcome(unpriced, partlyPriced, partlyJob)).openalex,
+		).toMatchObject({
+			status: "succeeded",
+			appliedFilters: [
+				"from_publication_date:2021-01-01,to_publication_date:2026-06-30 on search queries",
+			],
+			unsupportedFilters: [
+				"older foundational work (citation lookups are not priced)",
+				"direct identifier lookups (not priced, so identifier queries were searched as text)",
+			],
+			receivedCount: 2,
+		});
+		expect(lookups.calls.map((c) => c.url.searchParams.get("search"))).toEqual([
+			"calibration",
+			"10.1234/recorded.7",
+		]);
+
+		// A worker without an OpenAlex key fails the source visibly and charges nothing.
+		const keyless = await projectWithScope(researcher, {
+			queries: ["calibration"],
+		});
+		const keylessJob = await search(researcher, keyless);
+		await workspace.runQueuedJobs(openAlexSettings);
+		expect(
+			(await outcome(researcher, keyless, keylessJob)).openalex,
+		).toMatchObject({ status: "failed", errorClass: "credentials-missing" });
+		expect(await spent(researcher, keyless)).toBe(0);
 	},
 );
