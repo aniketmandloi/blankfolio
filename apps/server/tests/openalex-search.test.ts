@@ -4,7 +4,10 @@ import {
 	type SourceSettings,
 } from "@blankfolio/api/literature-sources";
 import type { LiteratureWorkerOptions } from "@blankfolio/api/literature-worker";
-import { createOpenAlexSource } from "@blankfolio/api/openalex";
+import {
+	checkOpenAlexWork,
+	createOpenAlexSource,
+} from "@blankfolio/api/openalex";
 import type { AppRouter } from "@blankfolio/api/routers/index";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { expect, test } from "vitest";
@@ -726,3 +729,24 @@ scenario(
 		expect(await spent(researcher, keyless)).toBe(0);
 	},
 );
+
+test("the live smoke check uses one free singleton lookup with the adapter's key and mapping", async () => {
+	const recorder = openAlexFetch(() => json(openAlexWork(2741809807)));
+	const result = await checkOpenAlexWork({
+		apiKey,
+		id: "W2741809807",
+		fetch: recorder.fetch,
+	});
+	expect(recorder.calls).toHaveLength(1);
+	expect(recorder.calls[0]?.authorization).toBe(`Bearer ${apiKey}`);
+	expect(recorder.calls[0]?.url.pathname).toBe("/works/W2741809807");
+	expect(recorder.calls[0]?.url.searchParams.get("search")).toBeNull();
+	expect(result).toMatchObject({
+		status: 200,
+		rateLimit: { "x-ratelimit-remaining": "9995" },
+		record: {
+			identifiers: ["doi:10.1234/recorded.2741809807", "openalex:W2741809807"],
+			abstractAvailable: true,
+		},
+	});
+});

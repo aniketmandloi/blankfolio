@@ -487,3 +487,46 @@ export function createOpenAlexSource({
 		},
 	};
 }
+
+/**
+ * Fetches one work through OpenAlex's free singleton endpoint with the adapter's credentials,
+ * field selection and mapping, for the explicitly run live smoke check.
+ */
+export async function checkOpenAlexWork({
+	apiKey,
+	id,
+	fetch: fetchImpl = globalThis.fetch,
+}: {
+	apiKey: string;
+	id: string;
+	fetch?: typeof globalThis.fetch;
+}) {
+	const response = await fetchImpl(
+		`${worksUrl}/${id}?${new URLSearchParams({ select })}`,
+		{
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				Accept: "application/json",
+			},
+			signal: AbortSignal.timeout(30_000),
+		},
+	);
+	const rateLimit = Object.fromEntries(
+		[
+			"x-ratelimit-limit",
+			"x-ratelimit-remaining",
+			"x-ratelimit-credits-used",
+			"x-ratelimit-reset",
+		].map((header) => [header, response.headers.get(header)]),
+	);
+	const work = response.ok ? workSchema.safeParse(await response.json()) : null;
+	const [compacted] = work?.success
+		? compact({ meta: { count: 1 }, results: [work.data] }).results
+		: [];
+	return {
+		status: response.status,
+		rateLimit,
+		record: compacted ? toRecord(compacted, "direct-lookup") : null,
+		references: compacted?.referenced_works?.length ?? 0,
+	};
+}
