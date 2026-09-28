@@ -81,6 +81,18 @@ async function projectWithScope(
 	});
 	return project.id;
 }
+async function saveSources(
+	researcher: Researcher,
+	projectId: string,
+	sources: string[],
+) {
+	const current = await researcher.literature.scope.query({ projectId });
+	await researcher.literature.saveScope.mutate({
+		projectId,
+		expectedRevision: current.revision,
+		scope: { ...current.scope, sources },
+	});
+}
 async function search(researcher: Researcher, projectId: string) {
 	const scope = await researcher.literature.scope.query({ projectId });
 	const job = await researcher.literature.submitSearch.mutate({
@@ -398,5 +410,74 @@ scenario(
 				relatedVersions: [],
 			}),
 		]);
+	},
+);
+
+scenario(
+	"arXiv requests from concurrent workers never overlap, and a long provider pause stops every project's arXiv search without a request",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("arxiv-throttle"),
+		);
+		let inFlight = 0;
+		let mostInFlight = 0;
+		let busy = false;
+		const worker = providerWorker(async () => {
+			inFlight++;
+			mostInFlight = Math.max(mostInFlight, inFlight);
+			await new Promise((resolve) => setTimeout(resolve, 150));
+			inFlight--;
+			return busy
+				? new Response("Rate exceeded.", {
+						status: 503,
+						headers: { "retry-after": "600" },
+					})
+				: atom(arxivFeed([arxivEntry("2403.00001")]));
+		});
+		const first = await projectWithScope(researcher, {
+			queries: ["calibration shift", "label noise"],
+			sources: ["arxiv"],
+		});
+		const second = await projectWithScope(researcher, {
+			queries: ["domain adaptation", "tabular benchmarks"],
+			sources: ["arxiv"],
+		});
+		await search(researcher, first);
+		await search(researcher, second);
+		await Promise.all([
+			workspace.runNextJob(worker.options),
+			workspace.runNextJob(worker.options),
+		]);
+		expect(worker.calls).toHaveLength(4);
+		expect(mostInFlight).toBe(1);
+
+		busy = true;
+		worker.advance(2 * 24 * 60 * 60);
+		const refused = await search(researcher, first);
+		await workspace.runQueuedJobs(worker.options);
+		// A cached answer from two days ago is labelled stale rather than waiting ten minutes.
+		expect(
+			(await outcome(researcher, first, refused)).source("arxiv"),
+		).toMatchObject({
+			status: "partial",
+			attempts: 1,
+			errorClass: "stale-cache",
+			cacheAgeSeconds: 2 * 24 * 60 * 60,
+		});
+		expect(worker.calls).toHaveLength(5);
+
+		await saveSources(researcher, second, ["arxiv", "fixture-catalog"]);
+		const paused = await search(researcher, second);
+		await workspace.runQueuedJobs(worker.options);
+		const during = await outcome(researcher, second, paused);
+		expect(during.job.state).toBe("succeeded");
+		expect(during.source("arxiv")).toMatchObject({
+			status: "failed",
+			attempts: 0,
+			errorClass: "rate-limited",
+		});
+		expect(during.snapshot?.coverage).toBe("partial");
+		expect(worker.calls).toHaveLength(5);
 	},
 );

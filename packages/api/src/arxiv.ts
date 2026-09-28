@@ -405,6 +405,10 @@ export function createArxivSource({
 				truncated,
 				usage: {},
 				errorClass: failed ? (stale ? "stale-cache" : failed.errorClass) : null,
+				// Even when a cached answer stood in, other workers must honour a long pause.
+				...(failed && failed.retryAfter > maxRetryAfterSeconds
+					? { pauseSeconds: failed.retryAfter }
+					: {}),
 			};
 		},
 	};
