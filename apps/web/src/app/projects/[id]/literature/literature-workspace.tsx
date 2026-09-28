@@ -326,6 +326,12 @@ const decisionText: Record<NonNullable<PossibleMatch["decision"]>, string> = {
 	"same-work": "You marked these as the same work. Both records stay as found.",
 	"different-works": "You marked these as different works.",
 };
+const titleMatchText: Record<PossibleMatch["evidence"]["titleMatch"], string> =
+	{
+		same: "Same title.",
+		subtitle: "Same title apart from a subtitle.",
+		near: "Titles a few characters apart.",
+	};
 function PossibleMatches({
 	projectId,
 	snapshot,
@@ -346,25 +352,26 @@ function PossibleMatches({
 		}),
 	);
 	if (!snapshot.possibleMatches.length) return null;
-	const titleOf = (id: string | undefined) =>
-		snapshot.papers.find((paper) => paper.id === id)?.title ?? "Unknown paper";
 	return (
 		<section aria-labelledby="matches-heading">
 			<h3 id="matches-heading">Possible matches to review</h3>
 			<p className="field-caption">
-				These records share no identifier but have the same title, years at most
-				one apart and a shared author family name. They stay separate papers
-				whatever you decide.
+				These records share no identifier but have the same or nearly the same
+				title, years at most one apart and a shared author family name. Some are
+				papers kept by an earlier snapshot of this project. They stay separate
+				papers whatever you decide.
 			</p>
 			<ol className="paper-list">
 				{snapshot.possibleMatches.map((match) => (
 					<li key={match.id}>
 						<p className="paper-title">
-							{titleOf(match.paperIds[0])} ({match.evidence.years[0]}) and{" "}
-							{titleOf(match.paperIds[1])} ({match.evidence.years[1]})
+							{match.evidence.titles[0]} ({match.evidence.years[0]}) and{" "}
+							{match.evidence.titles[1]} ({match.evidence.years[1]}
+							{match.inSnapshot[1] ? "" : ", from an earlier snapshot"})
 						</p>
 						<p className="field-caption">
-							Shared author family name
+							{titleMatchText[match.evidence.titleMatch]} Shared author family
+							name
 							{match.evidence.sharedAuthors.length > 1 ? "s" : ""}:{" "}
 							{match.evidence.sharedAuthors.join(", ")}.{" "}
 							{match.decision
