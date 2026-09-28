@@ -1,6 +1,6 @@
 # Literature searches, worker and spending limits
 
-A researcher saves a **Literature Scope** revision (one to three queries, sources, publication dates, inclusion/exclusion criteria, older-foundation intent), confirms the exact queries, and submits a search. The API writes the `research_job` row and enqueues its pg-boss message in the **same PostgreSQL transaction**; a separate Node worker runs it and publishes an immutable **Literature Snapshot**. Nothing here is a live provider: both sources are deterministic fixtures and no paid or network call is made. OpenAlex arrives with issue #10.
+A researcher saves a **Literature Scope** revision (one to three queries, sources, publication dates, inclusion/exclusion criteria, older-foundation intent), confirms the exact queries, and submits a search. The API writes the `research_job` row and enqueues its pg-boss message in the **same PostgreSQL transaction**; a separate Node worker runs it and publishes an immutable **Literature Snapshot**. Nothing here is a live provider: both sources are deterministic fixtures and no paid or network call is made. OpenAlex, priced routes, daily provider quotas and the 40-record reserve for later stages arrived with issue #10 (`issue-10-openalex.md`).
 
 ## What is stored
 
@@ -38,8 +38,8 @@ Three distinct schemas, each loaded by Varlock from its own directory:
 
 | Process | Schema | Variables |
 | --- | --- | --- |
-| API (`apps/server`) | `apps/server/.env.schema` | Existing auth/database variables plus optional `LITERATURE_SOURCE_PRICES` (JSON, USD per query request, e.g. `{"fixture-metered":0.02}`). The API enqueues through its request pool and never polls for jobs; after its first enqueue pg-boss refreshes its queue cache every 60 seconds, logging `job_queue_error` if that fails. |
-| Worker (`apps/worker`) | `apps/worker/.env.schema` | `DATABASE_URL` for the worker role (direct, non-pooler Neon connection), `LITERATURE_SOURCE_PRICES` (must match the API), and `DATABASE_MIGRATION_URL` only for `queue:migrate`. No auth secrets. |
+| API (`apps/server`) | `apps/server/.env.schema` | Existing auth/database variables plus optional `LITERATURE_SOURCE_PRICES` (JSON, USD per request per route, e.g. `{"fixture-metered":0.02}`) and, since #10, `LITERATURE_SOURCE_QUOTAS`. The API enqueues through its request pool and never polls for jobs; after its first enqueue pg-boss refreshes its queue cache every 60 seconds, logging `job_queue_error` if that fails. |
+| Worker (`apps/worker`) | `apps/worker/.env.schema` | `DATABASE_URL` for the worker role (direct, non-pooler Neon connection), `LITERATURE_SOURCE_PRICES` and `LITERATURE_SOURCE_QUOTAS` (must match the API), `OPENALEX_API_KEY` (#10), and `DATABASE_MIGRATION_URL` only for `queue:migrate`. No auth secrets. |
 | Migrations | `packages/db/.env.schema` and the worker's `DATABASE_MIGRATION_URL` | `pnpm db:migrate` applies `20260927114150_literature_search`; `pnpm --filter worker queue:migrate` installs or upgrades the pg-boss schema (`pgboss`) and creates the `literature-search` queue. Both need a role that can run DDL. |
 
 The worker role needs read/write on the application tables and on the `pgboss` schema; it does not need DDL. It holds two pools: the application pool from `createDb(config, { persistent: true })` (up to five connections) and pg-boss's own pool (up to three). Both are closed on `SIGINT`/`SIGTERM` after in-flight handlers finish (30-second grace).
