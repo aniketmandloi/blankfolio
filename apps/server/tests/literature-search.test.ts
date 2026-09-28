@@ -978,6 +978,7 @@ scenario(
 			["fixture-catalog", null],
 			["fixture-metered", "pricing-unknown"],
 			["openalex", "pricing-unknown"],
+			["arxiv", null],
 		]);
 		expect(budget).toMatchObject({
 			period: new Date().toISOString().slice(0, 7),

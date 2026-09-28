@@ -16,11 +16,20 @@ export {
 } from "./source-errors";
 
 export const recordCap = 200;
-/** Held back from every discovery run for the later arXiv and status stages. */
-export const laterStageReserve = 40;
-/** Records each selected source may contribute; the reserve is never allocated. */
-export const sourceAllocation = (sourceCount: number) =>
-	Math.floor((recordCap - laterStageReserve) / sourceCount);
+/** arXiv's share of the cap for recent preprints; without arXiv beside another source it stays unallocated. */
+export const arxivReserve = 40;
+/** So no source takes the whole cap, the others split what arXiv's reserve leaves equally. */
+export function sourceAllocations(sourceIds: string[]) {
+	const reserveUsed = sourceIds.length > 1 && sourceIds.includes("arxiv");
+	const shared = reserveUsed
+		? sourceIds.filter((id) => id !== "arxiv")
+		: sourceIds;
+	const each = Math.floor((recordCap - arxivReserve) / shared.length);
+	return {
+		reserved: reserveUsed ? 0 : arxivReserve,
+		allocation: (id: string) => (shared.includes(id) ? each : arxivReserve),
+	};
+}
 /** Cached provider responses older than this are deleted and never served, even as stale. */
 export const responseCacheRetentionSeconds = 7 * 24 * 60 * 60;
 

@@ -759,12 +759,15 @@ scenario(
 		const { id } = await deployed.projects.create.mutate({ title: "Deployed" });
 		const proposed = await deployed.literature.scope.query({ projectId: id });
 		expect(proposed.scope.sources).toEqual(["openalex"]);
-		expect(proposed.sources.map((source) => source.id)).toEqual(["openalex"]);
+		expect(proposed.sources.map((source) => source.id)).toEqual([
+			"openalex",
+			"arxiv",
+		]);
 		expect(
 			(await deployed.literature.budget.query({ projectId: id })).sources.map(
 				(source) => source.id,
 			),
-		).toEqual(["openalex"]);
+		).toEqual(["openalex", "arxiv"]);
 		await expect(
 			deployed.literature.saveScope.mutate({
 				projectId: id,

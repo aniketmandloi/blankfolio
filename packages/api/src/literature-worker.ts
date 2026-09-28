@@ -6,6 +6,7 @@ import {
 	paper,
 	paperAlias,
 	researchJob,
+	type SourceObservation,
 	type SourceOutcome,
 	type SourceRecord,
 	snapshotPaper,
@@ -20,7 +21,6 @@ import { and, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
 import { type JobWithMetadata, PgBoss } from "pg-boss";
 import {
 	type LiteratureSource,
-	laterStageReserve,
 	literatureSources,
 	maxChargeMicros,
 	maxRetryAfterSeconds,
@@ -32,7 +32,7 @@ import {
 	type SourceQuotas,
 	type SourceResult,
 	SourceUnavailableError,
-	sourceAllocation,
+	sourceAllocations,
 	sourceAvailability,
 	TransientSourceError,
 	UncertainSourceOutcome,
@@ -129,7 +129,7 @@ export function createLiteratureWorker({
 			if (!job) return null;
 			if (job.state === "queued") {
 				const { scope } = job.input;
-				const allocation = sourceAllocation(scope.sources.length);
+				const { allocation } = sourceAllocations(scope.sources);
 				await tx
 					.insert(sourceExecution)
 					.values(
@@ -145,7 +145,7 @@ export function createLiteratureWorker({
 								jobId,
 								projectId: job.projectId,
 								source: id,
-								allocation,
+								allocation: allocation(id),
 								effectiveQueries: scope.queries,
 								appliedFilters: filters.applied,
 								unsupportedFilters: filters.unsupported,
@@ -480,7 +480,12 @@ export function createLiteratureWorker({
 				(a, b) => order.indexOf(a.source) - order.indexOf(b.source),
 			);
 			// Records are the same paper only when they share an exact identifier; titles never merge.
-			type Kept = { record: SourceRecord; source: string; aliases: string[] };
+			type Kept = {
+				record: SourceRecord;
+				source: string;
+				aliases: string[];
+				alsoObserved: SourceObservation[];
+			};
 			const kept: Kept[] = [];
 			const byAlias = new Map<string, Kept>();
 			for (const execution of executions)
@@ -495,10 +500,17 @@ export function createLiteratureWorker({
 								byAlias.set(alias, same);
 								same.aliases.push(alias);
 							}
+						if (same.source !== execution.source)
+							same.alsoObserved.push({ source: execution.source, record });
 						continue;
 					}
 					if (kept.length >= recordCap) continue;
-					const entry = { record, source: execution.source, aliases };
+					const entry = {
+						record,
+						source: execution.source,
+						aliases,
+						alsoObserved: [],
+					};
 					kept.push(entry);
 					for (const alias of aliases) byAlias.set(alias, entry);
 				}
@@ -570,12 +582,19 @@ export function createLiteratureWorker({
 					)
 					.onConflictDoNothing();
 			// Two records can resolve to one earlier paper through different identifiers.
-			const seen = new Set<string>();
+			const first = new Map<string, Kept>();
 			const members = kept.filter((entry) => {
 				const id = paperIds.get(entry) ?? "";
-				if (seen.has(id)) return false;
-				seen.add(id);
-				return true;
+				const earlier = first.get(id);
+				if (!earlier) {
+					first.set(id, entry);
+					return true;
+				}
+				earlier.alsoObserved.push(
+					{ source: entry.source, record: entry.record },
+					...entry.alsoObserved,
+				);
+				return false;
 			});
 			const snapshotId = randomUUID();
 			await tx.insert(literatureSnapshot).values({
@@ -595,7 +614,7 @@ export function createLiteratureWorker({
 				recordCap,
 				paperCount: members.length,
 				allocations: {
-					reserved: laterStageReserve,
+					reserved: sourceAllocations(job.input.scope.sources).reserved,
 					sources: executions.map((execution) => {
 						const counts: Partial<Record<AcquisitionReason, number>> = {};
 						for (const { record, source } of members)
@@ -620,6 +639,7 @@ export function createLiteratureWorker({
 						rank,
 						acquisitionReason: entry.record.acquisitionReason,
 						observation: entry.record,
+						alsoObserved: entry.alsoObserved,
 					})),
 				);
 			await tx

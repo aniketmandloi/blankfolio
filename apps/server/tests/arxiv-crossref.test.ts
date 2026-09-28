@@ -5,11 +5,17 @@ import {
 	type SourceSettings,
 } from "@blankfolio/api/literature-sources";
 import type { LiteratureWorkerOptions } from "@blankfolio/api/literature-worker";
+import { createOpenAlexSource } from "@blankfolio/api/openalex";
 import type { AppRouter } from "@blankfolio/api/routers/index";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { expect, test } from "vitest";
 import { arxivEntry, arxivFeed, atom } from "./arxiv-fixture";
-import { openAlexFetch } from "./openalex-fixture";
+import {
+	json,
+	openAlexFetch,
+	openAlexPage,
+	openAlexWork,
+} from "./openalex-fixture";
 import { createTestWorkspace, fixturePrices } from "./workspace-fixture";
 
 type Workspace = Awaited<ReturnType<typeof createTestWorkspace>>;
@@ -24,8 +30,12 @@ const scenario = (name: string, run: (workspace: Workspace) => Promise<void>) =>
 	}, 240_000);
 
 const settings: SourceSettings = {
-	prices: fixturePrices,
-	quotas: {},
+	prices: {
+		...fixturePrices,
+		"openalex-search": 1_000,
+		"openalex-filter": 100,
+	},
+	quotas: { openalex: 1_000_000 },
 	fixtureSources: true,
 };
 
@@ -100,8 +110,8 @@ async function outcome(
 	};
 }
 
-/** Worker options whose arXiv adapter answers through a recording fetch and records waits. */
-function arxivWorker(handler: Parameters<typeof openAlexFetch>[0]) {
+/** Worker options whose provider adapters answer through one recording fetch and record waits. */
+function providerWorker(handler: Parameters<typeof openAlexFetch>[0]) {
 	const recorder = openAlexFetch(handler);
 	const sleeps: number[] = [];
 	const clock = new Date();
@@ -113,7 +123,12 @@ function arxivWorker(handler: Parameters<typeof openAlexFetch>[0]) {
 		},
 		sources: {
 			...literatureSources,
-			arxiv: createArxivSource({ fetch: recorder.fetch }),
+			openalex: createOpenAlexSource({
+				apiKey: "test-openalex-key",
+				fetch: recorder.fetch,
+				now: () => clock,
+			}),
+			arxiv: createArxivSource({ fetch: recorder.fetch, now: () => clock }),
 		},
 	};
 	return { options, calls: recorder.calls, sleeps };
@@ -134,7 +149,7 @@ scenario(
 			Array.from({ length: count }, (_, i) =>
 				arxivEntry(`2401.${String(from + i).padStart(5, "0")}`),
 			);
-		const worker = arxivWorker((url) => {
+		const worker = providerWorker((url) => {
 			if (url.searchParams.get("id_list"))
 				return atom(
 					arxivFeed([
@@ -226,6 +241,7 @@ scenario(
 						identifier: "doi:10.1234/published.15306",
 						relation: "published-version",
 						note: "International Conference on Learning Representations (ICLR), 2023",
+						paperId: null,
 					},
 				],
 				source: "arxiv",
@@ -240,5 +256,84 @@ scenario(
 				acquisitionReason: "discovery",
 			}),
 		);
+	},
+);
+
+scenario(
+	"OpenAlex and arXiv share the record cap, reconcile exact identifiers with every source's observation, and link preprints to published versions without merging them",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("arxiv-openalex"),
+		);
+		const projectId = await projectWithScope(researcher, {
+			queries: ["tabular transfer learning"],
+			sources: ["openalex", "arxiv"],
+		});
+		const worker = providerWorker((url) =>
+			url.hostname === "api.openalex.org"
+				? json(
+						openAlexPage([
+							openAlexWork(1),
+							openAlexWork(2, {
+								doi: "https://doi.org/10.48550/arXiv.2401.00001",
+								ids: { openalex: "https://openalex.org/W2" },
+								type: "preprint",
+								display_name: "OpenAlex's title for the preprint",
+							}),
+						]),
+					)
+				: atom(
+						arxivFeed([
+							arxivEntry("2401.00001", { version: 3 }),
+							arxivEntry("2401.00002", { doi: "10.1234/Recorded.1" }),
+						]),
+					),
+		);
+		const jobId = await search(researcher, projectId);
+		await workspace.runQueuedJobs(worker.options);
+		const { snapshot, source } = await outcome(researcher, projectId, jobId);
+		expect(source("openalex")?.allocation).toBe(160);
+		expect(source("arxiv")?.allocation).toBe(40);
+		expect(snapshot?.allocations).toEqual({
+			reserved: 0,
+			sources: [
+				{ source: "openalex", allocation: 160, kept: { discovery: 2 } },
+				{ source: "arxiv", allocation: 40, kept: { discovery: 1 } },
+			],
+		});
+		expect(snapshot?.paperCount).toBe(3);
+
+		const preprint = snapshot?.papers.find((p) =>
+			p.identifiers.includes("arxiv:2401.00001"),
+		);
+		expect(preprint).toMatchObject({
+			source: "openalex",
+			title: "OpenAlex's title for the preprint",
+			alsoObserved: [
+				{
+					source: "arxiv",
+					title: "Recorded preprint 2401.00001",
+					version: "v3",
+					url: "https://arxiv.org/abs/2401.00001v3",
+					identifiers: ["doi:10.48550/arxiv.2401.00001", "arxiv:2401.00001"],
+				},
+			],
+		});
+		const journal = snapshot?.papers.find(
+			(p) => p.title === "Recorded work W1",
+		);
+		const laterPreprint = snapshot?.papers.find((p) =>
+			p.identifiers.includes("arxiv:2401.00002"),
+		);
+		expect(laterPreprint?.id).not.toBe(journal?.id);
+		expect(laterPreprint?.relatedVersions).toEqual([
+			{
+				identifier: "doi:10.1234/recorded.1",
+				relation: "published-version",
+				note: null,
+				paperId: journal?.id,
+			},
+		]);
 	},
 );

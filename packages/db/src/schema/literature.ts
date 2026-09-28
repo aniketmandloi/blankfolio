@@ -133,6 +133,7 @@ export type SourceRecord = {
 	/** Other manifestations of the work the provider names; they stay separate papers. */
 	relatedVersions?: RelatedVersion[];
 };
+export type SourceObservation = { source: string; record: SourceRecord };
 export type RelatedVersion = {
 	identifier: string;
 	relation: "published-version" | "preprint";
@@ -268,6 +269,11 @@ export const snapshotPaper = pgTable(
 			.notNull(),
 		/** The record exactly as this source returned it; later observations never rewrite it. */
 		observation: jsonb("observation").$type<SourceRecord>(),
+		/** The same paper as other sources in this run returned it, reconciled by exact identifier. */
+		alsoObserved: jsonb("also_observed")
+			.$type<SourceObservation[]>()
+			.notNull()
+			.default([]),
 	},
 	(table) => [primaryKey({ columns: [table.snapshotId, table.paperId] })],
 );

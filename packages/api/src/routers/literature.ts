@@ -7,6 +7,7 @@ import {
 	literatureSnapshot,
 	paper,
 	researchJob,
+	type SourceRecord,
 	snapshotPaper,
 	sourceExecution,
 } from "@blankfolio/db/schema/literature";
@@ -21,7 +22,7 @@ import {
 	maxChargeMicros,
 	recordAliases,
 	type SourceSettings,
-	sourceAllocation,
+	sourceAllocations,
 	sourceAvailability,
 } from "../literature-sources";
 import { requireProject } from "../project-lifecycle";
@@ -341,7 +342,7 @@ export const literatureRouter = router({
 						source,
 						{
 							queries: saved.scope.queries,
-							limit: sourceAllocation(saved.scope.sources.length),
+							limit: sourceAllocations(saved.scope.sources).allocation(id),
 							includeFoundations: saved.scope.includeFoundations,
 							routes,
 						},
@@ -514,13 +515,28 @@ export const literatureRouter = router({
 						source: snapshotPaper.source,
 						acquisitionReason: snapshotPaper.acquisitionReason,
 						observation: snapshotPaper.observation,
+						alsoObserved: snapshotPaper.alsoObserved,
 					})
 					.from(snapshotPaper)
 					.innerJoin(paper, eq(paper.id, snapshotPaper.paperId))
 					.where(eq(snapshotPaper.snapshotId, input.snapshotId))
 					.orderBy(asc(snapshotPaper.rank));
+				const identifiers = (record: SourceRecord) =>
+					recordAliases(record).filter(
+						(alias) => !alias.startsWith("fixture:"),
+					);
+				// Related versions resolve only within this snapshot, so shared paper rows found by
+				// other projects are never revealed.
+				const inSnapshot = new Map<string, string>();
+				for (const row of rows)
+					for (const record of [
+						...(row.observation ? [row.observation] : []),
+						...row.alsoObserved.map((seen) => seen.record),
+					])
+						for (const alias of identifiers(record))
+							inSnapshot.set(alias, row.id);
 				// A snapshot shows what its source observed, not later corrections to the paper.
-				const papers = rows.map(({ observation, ...row }) => {
+				const papers = rows.map(({ observation, alsoObserved, ...row }) => {
 					const seen = observation ?? { ...row, key: "" };
 					return {
 						id: row.id,
@@ -532,9 +548,7 @@ export const literatureRouter = router({
 						doi: seen.doi,
 						url: seen.url,
 						identifiers: observation
-							? recordAliases(observation).filter(
-									(alias) => !alias.startsWith("fixture:"),
-								)
+							? identifiers(observation)
 							: row.doi
 								? [`doi:${row.doi.toLowerCase()}`]
 								: [],
@@ -545,7 +559,23 @@ export const literatureRouter = router({
 						sourceUpdatedAt: observation?.sourceUpdatedAt ?? null,
 						version: observation?.version ?? null,
 						versionDate: observation?.versionDate ?? null,
-						relatedVersions: observation?.relatedVersions ?? [],
+						relatedVersions: (observation?.relatedVersions ?? []).map(
+							(related) => ({
+								note: null,
+								...related,
+								paperId: inSnapshot.get(related.identifier) ?? null,
+							}),
+						),
+						alsoObserved: alsoObserved.map(({ source, record }) => ({
+							source,
+							title: record.title,
+							url: record.url,
+							identifiers: identifiers(record),
+							version: record.version ?? null,
+							versionDate: record.versionDate ?? null,
+							preprint: record.preprint ?? null,
+							abstractAvailable: record.abstractAvailable ?? false,
+						})),
 					};
 				});
 				return {
@@ -571,7 +601,7 @@ export const literatureRouter = router({
 								source,
 								{
 									queries: ["one query"],
-									limit: sourceAllocation(1),
+									limit: sourceAllocations([entry.id]).allocation(entry.id),
 									includeFoundations: true,
 									routes: sourceAvailability(source, ctx.sourceSettings).routes,
 								},
