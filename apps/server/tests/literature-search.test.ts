@@ -878,6 +878,7 @@ scenario(
 		expect(budget.sources.map((s) => [s.id, s.blockedBy])).toEqual([
 			["fixture-catalog", null],
 			["fixture-metered", "pricing-unknown"],
+			["openalex", "pricing-unknown"],
 		]);
 		expect(budget).toMatchObject({
 			period: new Date().toISOString().slice(0, 7),
