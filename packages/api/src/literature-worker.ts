@@ -44,6 +44,7 @@ import {
 	type CancelReason,
 	literatureSearchQueue,
 	literatureWorkOptions,
+	reconcileAbandonedSearches,
 } from "./research-jobs";
 import { holdUsage, reserveUsage, settleUsage } from "./usage-budget";
 
@@ -678,6 +679,23 @@ export async function runLiteratureWorker(
 	});
 	boss.on("error", (error) => console.error("job_queue_error", error.message));
 	await boss.start();
+	const reconcile = async () => {
+		const abandoned = await reconcileAbandonedSearches(options.db, boss);
+		if (abandoned.length)
+			console.error("literature_jobs_abandoned", abandoned.join(","));
+	};
+	await reconcile();
+	const reconciling = setInterval(() => {
+		reconcile().catch((error) =>
+			console.error(
+				"literature_reconcile_failed",
+				error instanceof Error ? error.name : "unknown",
+			),
+		);
+	}, 5 * 60_000);
 	await startLiteratureWorker(boss, options, pollingIntervalSeconds);
-	return () => boss.stop({ graceful: true, timeout: 30_000 });
+	return () => {
+		clearInterval(reconciling);
+		return boss.stop({ graceful: true, timeout: 30_000 });
+	};
 }
