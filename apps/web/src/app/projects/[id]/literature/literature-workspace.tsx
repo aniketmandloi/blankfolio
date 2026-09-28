@@ -819,6 +819,13 @@ export default function LiteratureWorkspace({ id }: { id: string }) {
 									<li className="job-row" key={job.id}>
 										<div>
 											<p className="job-state">
+												<span
+													className="job-dot"
+													data-active={
+														activeStates.includes(job.state) ? "" : undefined
+													}
+													aria-hidden="true"
+												/>
 												{jobStateText[job.state]}
 												<span className="field-caption">
 													{" "}
