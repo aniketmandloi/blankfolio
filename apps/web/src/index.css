@@ -1007,3 +1007,135 @@ summary:focus-visible {
 		display: none;
 	}
 }
+
+/* Motion */
+
+@media (prefers-reduced-motion: no-preference) {
+	:root {
+		interpolate-size: allow-keywords;
+	}
+
+	.folio-page > *,
+	.project-row {
+		animation: rise 320ms var(--ease-out) backwards;
+	}
+
+	.folio-page > :nth-child(2) {
+		animation-delay: 40ms;
+	}
+
+	.folio-page > :nth-child(3) {
+		animation-delay: 80ms;
+	}
+
+	.folio-page > :nth-child(4) {
+		animation-delay: 120ms;
+	}
+
+	.folio-page > :nth-child(n + 5) {
+		animation-delay: 160ms;
+	}
+
+	.project-row:nth-child(2) {
+		animation-delay: 30ms;
+	}
+
+	.project-row:nth-child(3) {
+		animation-delay: 60ms;
+	}
+
+	.project-row:nth-child(4) {
+		animation-delay: 90ms;
+	}
+
+	.project-row:nth-child(n + 5) {
+		animation-delay: 120ms;
+	}
+
+	.site-nav-link[aria-current="page"],
+	.trail-stage[aria-current="step"] .trail-label {
+		animation: mark-sweep 520ms var(--ease-out) 220ms backwards;
+	}
+
+	.trail-stage:not(:last-child)::after {
+		animation: draw 480ms var(--ease-out) backwards;
+		animation-delay: calc(var(--stage) * 70ms + 120ms);
+	}
+
+	.inline-confirm,
+	.detail-confirm,
+	.revision-recovery {
+		transition:
+			opacity 200ms ease,
+			translate 200ms var(--ease-out);
+	}
+
+	@starting-style {
+		.inline-confirm,
+		.detail-confirm,
+		.revision-recovery {
+			opacity: 0;
+			translate: 0 -4px;
+		}
+	}
+
+	.history-entry::details-content,
+	.latest-brief-panel::details-content {
+		block-size: 0;
+		overflow: clip;
+		transition:
+			block-size 240ms var(--ease-out),
+			content-visibility 240ms allow-discrete;
+	}
+
+	.history-entry[open]::details-content,
+	.latest-brief-panel[open]::details-content {
+		block-size: auto;
+	}
+
+	.form-success svg {
+		animation: pop 320ms cubic-bezier(0.3, 1.6, 0.5, 1) backwards;
+	}
+
+	.status-seal:not(.status-seal-muted) .seal-dot,
+	.job-dot[data-active] {
+		animation: pulse 2.4s ease-out infinite;
+	}
+}
+
+@keyframes rise {
+	from {
+		opacity: 0;
+		transform: translateY(6px);
+	}
+}
+
+@keyframes mark-sweep {
+	from {
+		background-size: 0% 100%;
+	}
+}
+
+@keyframes draw {
+	from {
+		transform: scaleX(0);
+	}
+}
+
+@keyframes pop {
+	from {
+		opacity: 0;
+		transform: scale(0.4);
+	}
+}
+
+@keyframes pulse {
+	0% {
+		box-shadow: 0 0 0 0 color-mix(in oklab, var(--success) 50%, transparent);
+	}
+
+	70%,
+	100% {
+		box-shadow: 0 0 0 6px transparent;
+	}
+}
