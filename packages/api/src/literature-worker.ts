@@ -3,6 +3,7 @@ import type { Database, Transaction } from "@blankfolio/db";
 import {
 	type AcquisitionReason,
 	literatureSnapshot,
+	type MatchEvidence,
 	type PaperStatusCheck,
 	paper,
 	paperAlias,
@@ -132,44 +133,85 @@ const familyNames = (authors: string[]) =>
 					.at(-1) || [],
 		),
 	);
-/**
- * Pairs of distinct papers alike in normalised title, a year apart at most and sharing an
- * author's family name. A shared title alone is never enough.
- */
-function possibleMatches(papers: { id: string; record: SourceRecord }[]) {
-	const byTitle = new Map<string, typeof papers>();
-	for (const entry of papers) {
-		const title = normalisedTitle(entry.record.title);
-		byTitle.set(title, [...(byTitle.get(title) ?? []), entry]);
+/** The title before a subtitle separator such as ": " or " - ". */
+const mainTitle = (title: string) =>
+	title.split(/[:?]\s|\s[-–—]\s/)[0] ?? title;
+function editDistance(a: string, b: string) {
+	let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+	for (let i = 1; i <= a.length; i++) {
+		const row = [i];
+		for (let j = 1; j <= b.length; j++)
+			row[j] = Math.min(
+				(previous[j] ?? 0) + 1,
+				(row[j - 1] ?? 0) + 1,
+				(previous[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1),
+			);
+		previous = row;
 	}
-	return [...byTitle].flatMap(([title, group]) =>
-		group.flatMap((one, index) =>
-			group.slice(index + 1).flatMap((other) => {
+	return previous[b.length] ?? 0;
+}
+function titleMatch(a: string, b: string): MatchEvidence["titleMatch"] | null {
+	const [full, otherFull] = [normalisedTitle(a), normalisedTitle(b)];
+	if (full === otherFull) return "same";
+	const [main, otherMain] = [
+		normalisedTitle(mainTitle(a)),
+		normalisedTitle(mainTitle(b)),
+	];
+	if (
+		(main !== full || otherMain !== otherFull) &&
+		main === otherMain &&
+		main.split(" ").length >= 3
+	)
+		return "subtitle";
+	return editDistance(full, otherFull) <=
+		Math.max(1, Math.floor(Math.max(full.length, otherFull.length) / 10))
+		? "near"
+		: null;
+}
+type MatchCandidate = {
+	id: string;
+	title: string;
+	authors: string[];
+	year: number;
+};
+/**
+ * Pairs of distinct papers, at least one of them new, whose titles match or nearly match, whose
+ * years are at most one apart and which share an author's family name. A title alone is never
+ * enough.
+ */
+function possibleMatches(fresh: MatchCandidate[], earlier: MatchCandidate[]) {
+	const byName = new Map<string, MatchCandidate[]>();
+	for (const paper of [...fresh, ...earlier])
+		for (const name of familyNames(paper.authors))
+			byName.set(name, [...(byName.get(name) ?? []), paper]);
+	const pairs = new Map<
+		string,
+		{ paperId: string; otherPaperId: string; evidence: MatchEvidence }
+	>();
+	for (const one of fresh)
+		for (const name of familyNames(one.authors))
+			for (const other of byName.get(name) ?? []) {
+				if (other.id === one.id) continue;
 				const [first, second] = one.id < other.id ? [one, other] : [other, one];
-				const names = familyNames(second.record.authors);
-				const sharedAuthors = [...familyNames(first.record.authors)].filter(
-					(name) => names.has(name),
-				);
-				return Math.abs(first.record.year - second.record.year) <= 1 &&
-					sharedAuthors.length
-					? [
-							{
-								paperId: first.id,
-								otherPaperId: second.id,
-								evidence: {
-									title,
-									years: [first.record.year, second.record.year] as [
-										number,
-										number,
-									],
-									sharedAuthors: sharedAuthors.sort(),
-								},
-							},
-						]
-					: [];
-			}),
-		),
-	);
+				const key = `${first.id}|${second.id}`;
+				if (pairs.has(key) || Math.abs(first.year - second.year) > 1) continue;
+				const match = titleMatch(first.title, second.title);
+				if (!match) continue;
+				const names = familyNames(second.authors);
+				pairs.set(key, {
+					paperId: first.id,
+					otherPaperId: second.id,
+					evidence: {
+						titles: [first.title, second.title],
+						titleMatch: match,
+						years: [first.year, second.year],
+						sharedAuthors: [...familyNames(first.authors)]
+							.filter((family) => names.has(family))
+							.sort(),
+					},
+				});
+			}
+	return [...pairs.values()];
 }
 
 /** Statuses confirmed within this window are reused rather than looked up again. */
@@ -880,12 +922,27 @@ export function createLiteratureWorker({
 						statusCheck: statusChecks.get(entry),
 					})),
 				);
-			const matches = possibleMatches(
-				members.map((entry) => ({
-					id: paperIds.get(entry) ?? "",
-					record: entry.record,
-				})),
-			);
+			const candidates = members.map((entry) => ({
+				id: paperIds.get(entry) ?? "",
+				title: entry.record.title,
+				authors: entry.record.authors,
+				year: entry.record.year,
+			}));
+			const candidateIds = new Set(candidates.map((candidate) => candidate.id));
+			// Any paper this project's earlier snapshots kept, compared by its public record.
+			const earlier = (
+				await tx
+					.selectDistinct({
+						id: paper.id,
+						title: paper.title,
+						authors: paper.authors,
+						year: paper.year,
+					})
+					.from(snapshotPaper)
+					.innerJoin(paper, eq(paper.id, snapshotPaper.paperId))
+					.where(eq(snapshotPaper.projectId, job.projectId))
+			).filter((candidate) => !candidateIds.has(candidate.id));
+			const matches = possibleMatches(candidates, earlier);
 			if (matches.length)
 				await tx
 					.insert(paperMatch)

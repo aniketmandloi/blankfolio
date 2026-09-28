@@ -305,7 +305,9 @@ export const snapshotPaper = pgTable(
 );
 
 export type MatchEvidence = {
-	title: string;
+	titles: [string, string];
+	/** Identical once normalised, identical without a subtitle, or a few characters apart. */
+	titleMatch: "same" | "subtitle" | "near";
 	years: [number, number];
 	sharedAuthors: string[];
 };

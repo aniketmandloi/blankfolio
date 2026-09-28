@@ -836,17 +836,30 @@ scenario(
 				publication_date: `${year}-02-01`,
 				authorships: authors.map(person),
 			});
+		let later = false;
 		const worker = providerWorker(() =>
 			json(
-				openAlexPage([
-					titled(10, "Robust tabular learning", 2024, [
-						"Ada Record",
-						"Ben Sample",
-					]),
-					titled(11, "Robust Tabular Learning.", 2025, ["A. Record"]),
-					titled(12, "Robust tabular learning", 2024, ["Zed Other"]),
-					titled(13, "Robust tabular learning", 2019, ["Ada Record"]),
-				]),
+				openAlexPage(
+					later
+						? [
+								titled(14, "Robust tabular learning: a benchmark study", 2024, [
+									"Ada Record",
+								]),
+								titled(15, "Robust tabluar learning", 2024, ["Ada Record"]),
+								titled(16, "Robust tabular learning for images", 2024, [
+									"Ada Record",
+								]),
+							]
+						: [
+								titled(10, "Robust tabular learning", 2024, [
+									"Ada Record",
+									"Ben Sample",
+								]),
+								titled(11, "Robust Tabular Learning.", 2025, ["A. Record"]),
+								titled(12, "Robust tabular learning", 2024, ["Zed Other"]),
+								titled(13, "Robust tabular learning", 2019, ["Ada Record"]),
+							],
+				),
 			),
 		);
 		const jobId = await search(researcher, projectId);
@@ -860,8 +873,10 @@ scenario(
 			{
 				id: expect.any(String),
 				paperIds: [idOf(10), idOf(11)],
+				inSnapshot: [true, true],
 				evidence: {
-					title: "robust tabular learning",
+					titles: ["Robust tabular learning", "Robust Tabular Learning."],
+					titleMatch: "same",
 					years: [2024, 2025],
 					sharedAuthors: ["record"],
 				},
@@ -917,6 +932,47 @@ scenario(
 				decidedAt: expect.any(String),
 			}),
 		]);
+
+		// A later search compares its papers with the project's earlier ones, allowing a
+		// subtitle or a small typo but never a title that only starts the same way.
+		later = true;
+		worker.advance(2 * 24 * 60 * 60);
+		const laterJob = await search(researcher, projectId);
+		await workspace.runQueuedJobs(worker.options);
+		const second = (await outcome(researcher, projectId, laterJob)).snapshot;
+		const laterId = (n: number) =>
+			second?.papers.find((p) => p.identifiers.includes(`openalex:W${n}`))?.id;
+		const pair = (
+			ids: [number, number],
+			titleMatch: string,
+			titles: [string, string],
+		) =>
+			expect.objectContaining({
+				paperIds: [laterId(ids[0]), idOf(ids[1])],
+				inSnapshot: [true, false],
+				evidence: expect.objectContaining({ titleMatch, titles }),
+			});
+		expect(second?.possibleMatches).toHaveLength(4);
+		expect(second?.possibleMatches).toEqual(
+			expect.arrayContaining([
+				pair([14, 10], "subtitle", [
+					"Robust tabular learning: a benchmark study",
+					"Robust tabular learning",
+				]),
+				pair([14, 11], "subtitle", [
+					"Robust tabular learning: a benchmark study",
+					"Robust Tabular Learning.",
+				]),
+				pair([15, 10], "near", [
+					"Robust tabluar learning",
+					"Robust tabular learning",
+				]),
+				pair([15, 11], "near", [
+					"Robust tabluar learning",
+					"Robust Tabular Learning.",
+				]),
+			]),
+		);
 	},
 );
 

@@ -16,7 +16,7 @@ import {
 import type { ResearchBrief } from "@blankfolio/db/schema/projects";
 import { briefRevision } from "@blankfolio/db/schema/projects";
 import { TRPCError } from "@trpc/server";
-import { and, asc, count, desc, eq, inArray, max, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, max, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { researchProcedure, router } from "../index";
 import {
@@ -625,6 +625,7 @@ export const literatureRouter = router({
 				);
 				const rank = new Map(papers.map((row, index) => [row.id, index]));
 				const paperIdList = [...rank.keys()];
+				// A match may reach a paper kept only by an earlier snapshot of this project.
 				const matches = paperIdList.length
 					? await tx
 							.select()
@@ -632,11 +633,14 @@ export const literatureRouter = router({
 							.where(
 								and(
 									eq(paperMatch.projectId, input.projectId),
-									inArray(paperMatch.paperId, paperIdList),
-									inArray(paperMatch.otherPaperId, paperIdList),
+									or(
+										inArray(paperMatch.paperId, paperIdList),
+										inArray(paperMatch.otherPaperId, paperIdList),
+									),
 								),
 							)
 					: [];
+				const order = (id: string) => rank.get(id) ?? paperIdList.length;
 				return {
 					...snapshot.snapshot,
 					scope: snapshot.scope,
@@ -644,19 +648,19 @@ export const literatureRouter = router({
 					papers,
 					possibleMatches: matches
 						.map((match) => {
-							// Listed in snapshot order, whichever way the pair is stored.
-							const swap =
-								(rank.get(match.paperId) ?? 0) >
-								(rank.get(match.otherPaperId) ?? 0);
-							const [year, otherYear] = match.evidence.years;
+							// Papers in this snapshot come first, in snapshot order.
+							const swap = order(match.paperId) > order(match.otherPaperId);
+							const flip = <T>([one, other]: [T, T]): [T, T] =>
+								swap ? [other, one] : [one, other];
+							const paperIds = flip([match.paperId, match.otherPaperId]);
 							return {
 								id: match.id,
-								paperIds: swap
-									? [match.otherPaperId, match.paperId]
-									: [match.paperId, match.otherPaperId],
+								paperIds,
+								inSnapshot: paperIds.map((id) => rank.has(id)),
 								evidence: {
 									...match.evidence,
-									years: swap ? [otherYear, year] : [year, otherYear],
+									titles: flip(match.evidence.titles),
+									years: flip(match.evidence.years),
 								},
 								decision: match.decision,
 								revision: match.revision,
@@ -665,8 +669,9 @@ export const literatureRouter = router({
 						})
 						.sort(
 							(a, b) =>
-								(rank.get(a.paperIds[0] ?? "") ?? 0) -
-								(rank.get(b.paperIds[0] ?? "") ?? 0),
+								order(a.paperIds[0]) - order(b.paperIds[0]) ||
+								order(a.paperIds[1]) - order(b.paperIds[1]) ||
+								a.id.localeCompare(b.id),
 						),
 				};
 			}, readOnly),
