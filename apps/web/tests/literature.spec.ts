@@ -48,7 +48,7 @@ test("a researcher saves a Literature Scope, confirms the exact queries and retu
 	await expect(page.getByText(/Partial coverage/)).toBeVisible();
 	await expect(page.getByText("Partial answer")).toBeVisible();
 	await expect(
-		page.getByText(/held back for arXiv's recent preprints/),
+		page.getByText(/arXiv's share when it runs beside other sources/),
 	).toBeVisible();
 	await expect(page.getByText(/^Preprint · /).first()).toBeVisible();
 	await expect(page.getByText(/Metadata only/).first()).toBeVisible();

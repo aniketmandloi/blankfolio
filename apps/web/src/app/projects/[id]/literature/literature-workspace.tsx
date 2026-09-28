@@ -126,7 +126,7 @@ function allocationText(snapshot: Snapshot) {
 		const older = total - (entry.kept.discovery ?? 0);
 		return `${label} contributed ${total} of its ${entry.allocation}${older ? ` (${older} older or looked-up works)` : ""}`;
 	});
-	return ` ${kept.join("; ")}.${snapshot.allocations.reserved ? ` ${snapshot.allocations.reserved} records are held back for arXiv's recent preprints, which this search did not include.` : ""}`;
+	return ` ${kept.join("; ")}.${snapshot.allocations.reserved ? ` ${snapshot.allocations.reserved} records stay unallocated; they are arXiv's share when it runs beside other sources.` : ""}`;
 }
 type PublicationStatus = Paper["publicationStatus"];
 const statusStateText: Record<PublicationStatus["state"], string> = {
@@ -177,14 +177,14 @@ function snapshotStatusText(check: Snapshot["statusCheck"]) {
 		return ` ${registered}. No notice found is not the same as a clean record.`;
 	return ` The Crossref status check ${check.outcome === "partial" ? "stopped early" : "failed"} (${errorText[check.errorClass ?? ""] ?? check.errorClass}): ${registered}, ${check.unknown} unknown.`;
 }
-function versionText(paper: Paper) {
+function versionText(paper: Paper, labelOf: (source: string) => string) {
 	return [
 		paper.version
 			? `Version ${paper.version}${paper.versionDate ? ` of ${paper.versionDate}` : ""}`
 			: "",
 		...paper.alsoObserved.map(
 			(seen) =>
-				`Also returned by ${seen.source === "arxiv" ? "arXiv" : seen.source === "openalex" ? "OpenAlex" : seen.source}${seen.version ? ` (${seen.version})` : ""}`,
+				`Also returned by ${labelOf(seen.source)}${seen.version ? ` (${seen.version})` : ""}`,
 		),
 	]
 		.filter(Boolean)
@@ -424,6 +424,8 @@ function SnapshotView({
 					: messageOf(snapshotQuery.error)}
 			</p>
 		);
+	const labelOf = (source: string) =>
+		snapshot.sources.find((s) => s.source === source)?.label ?? source;
 	return (
 		<section className="history-panel" aria-labelledby="snapshot-heading">
 			<h2 id="snapshot-heading">
@@ -466,13 +468,12 @@ function SnapshotView({
 							<p className="field-caption">
 								{paper.authors.join(", ") || "Authors not supplied"} ·{" "}
 								{paper.publicationDate ?? paper.year} · found by{" "}
-								{snapshot.sources.find((s) => s.source === paper.source)
-									?.label ?? paper.source}
+								{labelOf(paper.source)}
 							</p>
 							<p className="field-caption">{paperStatus(paper)}</p>
-							{versionText(paper) && (
-								<p className="field-caption">{versionText(paper)}</p>
-							)}
+							{paper.version || paper.alsoObserved.length ? (
+								<p className="field-caption">{versionText(paper, labelOf)}</p>
+							) : null}
 							{paper.relatedVersions.map((related) => (
 								<p className="field-caption" key={related.identifier}>
 									{relationText[related.relation]}:{" "}

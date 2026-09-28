@@ -80,7 +80,7 @@ export function proposeScope(
 		queries: [
 			...new Set([brief.topic.trim(), brief.title.trim()].filter(Boolean)),
 		].map((query) => query.slice(0, 2_000)),
-		// Broad discovery plus arXiv's recent preprints; fixture runs never call a live provider.
+		// Fixture-only setups must not propose a live provider.
 		sources:
 			settings.fixtureSources &&
 			(!literatureSources.openalex ||
