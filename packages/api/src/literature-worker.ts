@@ -198,6 +198,43 @@ export function createLiteratureWorker({
 			});
 	}
 
+	/**
+	 * Serialises a source's requests across every worker with a transaction-scoped advisory lock,
+	 * starting each no sooner than `minIntervalSeconds` after the previous one finished.
+	 */
+	function pacer(source: LiteratureSource) {
+		const interval = source.minIntervalSeconds;
+		return <T>(request: () => Promise<T>): Promise<T> =>
+			interval
+				? db.transaction(async (tx) => {
+						await tx.execute(
+							sql`select pg_advisory_xact_lock(hashtext(${`source-pace:${source.id}`}))`,
+						);
+						const [throttle] = await tx
+							.select({ pausedUntil: sourceThrottle.pausedUntil })
+							.from(sourceThrottle)
+							.where(eq(sourceThrottle.source, source.id));
+						const wait =
+							(throttle?.pausedUntil.getTime() ?? 0) - now().getTime();
+						if (wait > 0) await sleep(wait);
+						try {
+							return await request();
+						} finally {
+							const pausedUntil = new Date(now().getTime() + interval * 1000);
+							await tx
+								.insert(sourceThrottle)
+								.values({ source: source.id, pausedUntil })
+								.onConflictDoUpdate({
+									target: sourceThrottle.source,
+									set: {
+										pausedUntil: sql`greatest(${sourceThrottle.pausedUntil}, excluded.paused_until)`,
+									},
+								});
+						}
+					})
+				: request();
+	}
+
 	function responseCache(projectId: string, sourceId: string): SourceCache {
 		const keyOf = (key: string) =>
 			createHash("sha256").update(`${sourceId}\n${key}`).digest("hex");
@@ -312,6 +349,7 @@ export function createLiteratureWorker({
 				finalAttempt: attempt === maxSourceAttempts,
 				routes,
 				cache: responseCache(job.projectId, source.id),
+				pace: pacer(source),
 			};
 			let reservation: string | undefined;
 			if (metered) {

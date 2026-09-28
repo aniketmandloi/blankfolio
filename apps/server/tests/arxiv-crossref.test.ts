@@ -1,0 +1,244 @@
+import { randomUUID } from "node:crypto";
+import { createArxivSource } from "@blankfolio/api/arxiv";
+import {
+	literatureSources,
+	type SourceSettings,
+} from "@blankfolio/api/literature-sources";
+import type { LiteratureWorkerOptions } from "@blankfolio/api/literature-worker";
+import type { AppRouter } from "@blankfolio/api/routers/index";
+import { createTRPCClient, httpLink } from "@trpc/client";
+import { expect, test } from "vitest";
+import { arxivEntry, arxivFeed, atom } from "./arxiv-fixture";
+import { openAlexFetch } from "./openalex-fixture";
+import { createTestWorkspace, fixturePrices } from "./workspace-fixture";
+
+type Workspace = Awaited<ReturnType<typeof createTestWorkspace>>;
+const scenario = (name: string, run: (workspace: Workspace) => Promise<void>) =>
+	test.concurrent(name, async () => {
+		const workspace = await createTestWorkspace();
+		try {
+			await run(workspace);
+		} finally {
+			await workspace.close();
+		}
+	}, 240_000);
+
+const settings: SourceSettings = {
+	prices: fixturePrices,
+	quotas: {},
+	fixtureSources: true,
+};
+
+function researcherFor(workspace: Workspace, cookie: string) {
+	const app = workspace.createAuthApp({}, settings);
+	return createTRPCClient<AppRouter>({
+		links: [
+			httpLink({
+				url: "http://localhost/trpc",
+				headers: { cookie },
+				fetch: async (url, init) => app.request(new Request(url, init)),
+			}),
+		],
+	});
+}
+type Researcher = ReturnType<typeof researcherFor>;
+
+async function projectWithScope(
+	researcher: Researcher,
+	scope: { queries: string[]; sources: string[] },
+) {
+	const project = await researcher.projects.create.mutate({
+		title: "arXiv freshness",
+	});
+	await researcher.projects.saveBrief.mutate({
+		id: project.id,
+		expectedRevision: 1,
+		brief: { ...project.brief, topic: "Tabular transfer learning" },
+	});
+	const current = await researcher.literature.scope.query({
+		projectId: project.id,
+	});
+	await researcher.literature.saveScope.mutate({
+		projectId: project.id,
+		expectedRevision: current.revision,
+		scope: {
+			...current.scope,
+			dateFrom: "2021-01-01",
+			dateTo: "2026-06-30",
+			includeFoundations: false,
+			...scope,
+		},
+	});
+	return project.id;
+}
+async function search(researcher: Researcher, projectId: string) {
+	const scope = await researcher.literature.scope.query({ projectId });
+	const job = await researcher.literature.submitSearch.mutate({
+		projectId,
+		scopeRevision: scope.revision,
+		idempotencyKey: randomUUID(),
+		queries: scope.scope.queries,
+	});
+	return job.id;
+}
+async function outcome(
+	researcher: Researcher,
+	projectId: string,
+	jobId: string,
+) {
+	const job = await researcher.literature.job.query({ projectId, jobId });
+	const snapshot = job.snapshotId
+		? await researcher.literature.snapshot.query({
+				projectId,
+				snapshotId: job.snapshotId,
+			})
+		: null;
+	return {
+		job,
+		snapshot,
+		source: (id: string) => job.sources.find((s) => s.source === id),
+	};
+}
+
+/** Worker options whose arXiv adapter answers through a recording fetch and records waits. */
+function arxivWorker(handler: Parameters<typeof openAlexFetch>[0]) {
+	const recorder = openAlexFetch(handler);
+	const sleeps: number[] = [];
+	const clock = new Date();
+	const options: Partial<LiteratureWorkerOptions> = {
+		...settings,
+		now: () => clock,
+		sleep: async (milliseconds) => {
+			sleeps.push(milliseconds);
+		},
+		sources: {
+			...literatureSources,
+			arxiv: createArxivSource({ fetch: recorder.fetch }),
+		},
+	};
+	return { options, calls: recorder.calls, sleeps };
+}
+
+scenario(
+	"an arXiv search keeps effective queries, versions, dates, DOI links and abstract availability, one paced request at a time",
+	async (workspace) => {
+		const researcher = researcherFor(
+			workspace,
+			await workspace.signIn("arxiv-journey"),
+		);
+		const projectId = await projectWithScope(researcher, {
+			queries: ["tabular transfer (learning)", "arXiv:2206.15306"],
+			sources: ["arxiv"],
+		});
+		const page = (from: number, count: number) =>
+			Array.from({ length: count }, (_, i) =>
+				arxivEntry(`2401.${String(from + i).padStart(5, "0")}`),
+			);
+		const worker = arxivWorker((url) => {
+			if (url.searchParams.get("id_list"))
+				return atom(
+					arxivFeed([
+						arxivEntry("2206.15306", {
+							version: 2,
+							title: "Transfer Learning with Deep\n      Tabular Models",
+							published: "2022-06-30T14:24:32Z",
+							updated: "2023-08-07T04:07:06Z",
+							journalRef:
+								"International Conference on Learning Representations (ICLR), 2023",
+							doi: "10.1234/Published.15306",
+						}),
+					]),
+				);
+			const start = Number(url.searchParams.get("start"));
+			const count = Number(url.searchParams.get("max_results"));
+			return atom(arxivFeed(page(start, count), 420, start));
+		});
+
+		const jobId = await search(researcher, projectId);
+		await workspace.runQueuedJobs(worker.options);
+		const run = await outcome(researcher, projectId, jobId);
+		expect(run.job.state).toBe("succeeded");
+		expect(run.source("arxiv")).toMatchObject({
+			label: "arXiv",
+			status: "succeeded",
+			attempts: 1,
+			allocation: 160,
+			reportedCount: 421,
+			receivedCount: 160,
+			truncated: true,
+			cursor: JSON.stringify([159]),
+			errorClass: null,
+			unsupportedFilters: [],
+			appliedFilters: [
+				"all:tabular AND all:transfer AND all:learning AND submittedDate:[202101010000 TO 202606302359]",
+				"arXiv identifiers looked up directly (id_list) without the date filter",
+			],
+		});
+
+		expect(
+			worker.calls.map(({ url }) => [
+				url.origin + url.pathname,
+				url.searchParams.get("search_query"),
+				url.searchParams.get("id_list"),
+				url.searchParams.get("start"),
+				url.searchParams.get("max_results"),
+			]),
+		).toEqual([
+			["https://export.arxiv.org/api/query", null, "2206.15306", null, "1"],
+			[
+				"https://export.arxiv.org/api/query",
+				"all:tabular AND all:transfer AND all:learning AND submittedDate:[202101010000 TO 202606302359]",
+				null,
+				"0",
+				"100",
+			],
+			[
+				"https://export.arxiv.org/api/query",
+				"all:tabular AND all:transfer AND all:learning AND submittedDate:[202101010000 TO 202606302359]",
+				null,
+				"100",
+				"59",
+			],
+		]);
+		// arXiv allows one request every three seconds across the deployment.
+		expect(worker.sleeps.filter((ms) => ms === 3_000)).toHaveLength(2);
+
+		const snapshot = run.snapshot;
+		expect(snapshot?.paperCount).toBe(160);
+		expect(
+			snapshot?.papers.find((p) => p.acquisitionReason === "direct-lookup"),
+		).toEqual(
+			expect.objectContaining({
+				title: "Transfer Learning with Deep Tabular Models",
+				authors: ["Ada Record", "Ben Sample"],
+				year: 2022,
+				publicationDate: "2022-06-30",
+				doi: "10.48550/arxiv.2206.15306",
+				identifiers: ["doi:10.48550/arxiv.2206.15306", "arxiv:2206.15306"],
+				url: "https://arxiv.org/abs/2206.15306v2",
+				preprint: true,
+				workType: "preprint",
+				abstractAvailable: true,
+				version: "v2",
+				versionDate: "2023-08-07",
+				relatedVersions: [
+					{
+						identifier: "doi:10.1234/published.15306",
+						relation: "published-version",
+						note: "International Conference on Learning Representations (ICLR), 2023",
+					},
+				],
+				source: "arxiv",
+			}),
+		);
+		expect(
+			snapshot?.papers.find((p) => p.title === "Recorded preprint 2401.00000"),
+		).toEqual(
+			expect.objectContaining({
+				version: "v1",
+				relatedVersions: [],
+				acquisitionReason: "discovery",
+			}),
+		);
+	},
+);

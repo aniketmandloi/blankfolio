@@ -127,6 +127,16 @@ export type SourceRecord = {
 	abstractAvailable?: boolean;
 	/** When the provider last changed its record. */
 	sourceUpdatedAt?: string | null;
+	/** The provider's version of this copy, e.g. arXiv `v2`, and the date that version appeared. */
+	version?: string | null;
+	versionDate?: string | null;
+	/** Other manifestations of the work the provider names; they stay separate papers. */
+	relatedVersions?: RelatedVersion[];
+};
+export type RelatedVersion = {
+	identifier: string;
+	relation: "published-version" | "preprint";
+	note?: string | null;
 };
 /** One source's checkpoint within a job; completed rows are never re-executed. */
 export const sourceExecution = pgTable(

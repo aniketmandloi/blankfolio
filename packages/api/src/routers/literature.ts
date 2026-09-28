@@ -543,6 +543,9 @@ export const literatureRouter = router({
 						workType: observation?.workType ?? null,
 						abstractAvailable: observation?.abstractAvailable ?? false,
 						sourceUpdatedAt: observation?.sourceUpdatedAt ?? null,
+						version: observation?.version ?? null,
+						versionDate: observation?.versionDate ?? null,
+						relatedVersions: observation?.relatedVersions ?? [],
 					};
 				});
 				return {

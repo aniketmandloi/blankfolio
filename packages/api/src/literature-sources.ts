@@ -4,6 +4,7 @@ import type {
 	SourceRecord,
 } from "@blankfolio/db/schema/literature";
 import { z } from "zod";
+import { createArxivSource } from "./arxiv";
 import { createOpenAlexSource } from "./openalex";
 import { TransientSourceError, UncertainSourceOutcome } from "./source-errors";
 
@@ -50,6 +51,8 @@ export type SourceRequest = {
 	/** Paid routes with a configured price; the source must not call any other paid route. */
 	routes: string[];
 	cache: SourceCache;
+	/** Runs one provider request as the deployment's only one, spaced by `minIntervalSeconds`. */
+	pace: <T>(request: () => Promise<T>) => Promise<T>;
 };
 export type SourceResult = {
 	outcome: "succeeded" | "empty" | "partial";
@@ -80,6 +83,8 @@ export type LiteratureSource = {
 	quotaRequired: boolean;
 	/** Returns fabricated records; offered only where fixture sources are enabled. */
 	fixture?: boolean;
+	/** Provider terms allow one connection at a time with this gap, across every worker. */
+	minIntervalSeconds?: number;
 	filters: (
 		scope: LiteratureScope,
 		routes: string[],
@@ -204,6 +209,7 @@ export const literatureSources: Record<string, LiteratureSource> = {
 	),
 	/** Without credentials it fails visibly; the worker supplies a configured instance. */
 	openalex: createOpenAlexSource({}),
+	arxiv: createArxivSource({}),
 };
 
 /** Micro-dollars per request on each paid route; a source whose required route is unpriced is disabled. */
